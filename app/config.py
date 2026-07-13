@@ -1,12 +1,13 @@
 """
 集中管理程式設定。
 
-本版本的網路資料核心完全使用 yfinance；不再呼叫 TWSE 或 TPEx OpenAPI。
+本版本的行情及公司行動核心使用 yfinance；繁中名稱補強使用 Yahoo Finance
+台灣地區的公開搜尋／報價頁，不呼叫 TWSE 或 TPEx OpenAPI。
 """
 
 from pathlib import Path
 
-APP_TITLE = '台股庫存、損益與配息管理（yfinance v1.1）'
+APP_TITLE = '台股庫存、損益與配息管理（yfinance v1.2）'
 WINDOW_SIZE = '1480x880'
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -15,16 +16,12 @@ DATABASE_PATH = DATA_DIR / 'portfolio_yfinance.db'
 EXPORT_DIR = PROJECT_ROOT / 'exports'
 YFINANCE_CACHE_DIR = DATA_DIR / 'yfinance_cache'
 
-# Yahoo Screener 單次最多通常為 250 筆；以 offset 分頁並設防呆頁數。
 SCREENER_PAGE_SIZE = 250
 SCREENER_MAX_PAGES = 30
 
-# yf.download 批次太大較容易被 Yahoo 限流；100 檔是保守折衷。
 QUOTE_BATCH_SIZE = 50
 QUOTE_PERIOD = '1mo'
 QUOTE_INTERVAL = '1d'
-
-# 公司行動只針對持股同步，避免對全市場逐檔發出數千次請求。
 ACTION_PERIOD = 'max'
 
 MARKET_CHOICES = {
@@ -34,13 +31,28 @@ MARKET_CHOICES = {
     'EMERGING': '興櫃（通常為 .TWO，Yahoo 覆蓋不保證）',
 }
 
+# 建立商品清冊時可選擇的範圍。預設不下載權證及其他衍生商品。
+UNIVERSE_CATEGORY_CHOICES = {
+    'TWSE_STOCK': '上市公司股票',
+    'TPEX_STOCK': '上櫃／興櫃公司股票（Yahoo .TWO）',
+    'TWSE_ETF': '上市 ETF／基金商品',
+    'TPEX_ETF': '上櫃 ETF／基金商品',
+    'ETN': 'ETN／其他交易所商品',
+    'WARRANT': '權證／衍生商品',
+    'OTHER': '其他無法分類商品',
+}
+DEFAULT_UNIVERSE_CATEGORIES = {
+    'TWSE_STOCK',
+    'TPEX_STOCK',
+    'TWSE_ETF',
+    'TPEX_ETF',
+}
 
-# Yahoo 全球 Screener 通常回傳英文名稱。程式會透過同一個 Yahoo/yfinance
-# 傳輸層，批次要求 zh-TW / TW 的本地化名稱；若 Yahoo 未提供則保留英文。
 LOCALIZED_NAME_BATCH_SIZE = 50
+LOCALIZED_NAME_WORKERS = 6
 YAHOO_LOCALIZED_QUOTE_URL = 'https://query1.finance.yahoo.com/v7/finance/quote'
+YAHOO_LOCALIZED_SEARCH_URL = 'https://query2.finance.yahoo.com/v1/finance/search'
+YAHOO_TW_QUOTE_PAGE = 'https://tw.stock.yahoo.com/quote/{symbol}'
 NAME_OVERRIDES_PATH = DATA_DIR / 'name_overrides.csv'
 
-# repair=True 可改善部分非美國市場價格／股利異常，但需要 SciPy。
-# 程式會自動檢查 SciPy；未安裝時自動改用 repair=False，避免整批下載失敗。
 ENABLE_PRICE_REPAIR = True

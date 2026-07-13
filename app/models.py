@@ -15,6 +15,7 @@ class Instrument:
     market_segment: str = 'AUTO'
     quote_type: str = ''
     currency: str = 'TWD'
+    product_category: str = 'OTHER'
     source: str = 'yfinance'
 
 
