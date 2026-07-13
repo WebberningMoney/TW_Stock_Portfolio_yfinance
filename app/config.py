@@ -1,13 +1,13 @@
 """
 集中管理程式設定。
 
-本版本的行情及公司行動核心使用 yfinance；繁中名稱補強使用 Yahoo Finance
+本版本的行情及股利／分割資料核心使用 yfinance；繁中名稱補強使用 Yahoo Finance
 台灣地區的公開搜尋／報價頁，不呼叫 TWSE 或 TPEx OpenAPI。
 """
 
 from pathlib import Path
 
-APP_TITLE = '台股庫存、損益與配息管理（yfinance v1.3）'
+APP_TITLE = '台股庫存、損益與配息管理（yfinance＋Yahoo 台灣 v1.4）'
 WINDOW_SIZE = '1540x930'
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -55,6 +55,12 @@ LOCALIZED_NAME_WORKERS = 6
 YAHOO_LOCALIZED_QUOTE_URL = 'https://query1.finance.yahoo.com/v7/finance/quote'
 YAHOO_LOCALIZED_SEARCH_URL = 'https://query2.finance.yahoo.com/v1/finance/search'
 YAHOO_TW_QUOTE_PAGE = 'https://tw.stock.yahoo.com/quote/{symbol}'
+YAHOO_TW_DIVIDEND_PAGE = 'https://tw.stock.yahoo.com/quote/{symbol}/dividend'
 NAME_OVERRIDES_PATH = DATA_DIR / 'name_overrides.csv'
 
 ENABLE_PRICE_REPAIR = True
+
+# 單一商品抓取失敗時，包含行情重試、yfinance 股利／分割及股利頁爬蟲。
+HTTP_ITEM_RETRIES = 3
+RETRY_BACKOFF_SECONDS = 1.0
+YAHOO_TW_REQUEST_DELAY_SECONDS = 0.35

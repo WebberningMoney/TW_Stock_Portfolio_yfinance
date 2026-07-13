@@ -54,7 +54,13 @@ class MarketQuote:
 
 @dataclass(slots=True)
 class CorporateAction:
-    """Yahoo Actions 中的現金股利或股票分割／股票股利事件。"""
+    """現金股利或股票分割事件。
+
+    action_date：股利使用除息日；分割使用事件日。
+    payment_date：Yahoo 台灣股利政策頁可取得時，保存現金發放日。
+    period：例如 2026Q2、2025。
+    announcement_status：ANNOUNCED／EX_DATE_PASSED／PAID 等狀態。
+    """
 
     symbol: str
     stock_code: str
@@ -63,3 +69,6 @@ class CorporateAction:
     action_type: str  # DIVIDEND 或 SPLIT
     value: float
     source: str = 'yfinance'
+    period: str = ''
+    payment_date: str = ''
+    announcement_status: str = ''

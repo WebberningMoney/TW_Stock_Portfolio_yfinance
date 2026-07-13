@@ -15,7 +15,10 @@ class Database:
         self.path = path
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path)
+        # 背景執行緒連線前再次確保資料夾存在，避免資料夾被移動或刪除後
+        # 出現 sqlite3.OperationalError: unable to open database file。
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(str(self.path), timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute('PRAGMA foreign_keys = ON')
         return connection
@@ -85,6 +88,9 @@ class Database:
                     action_type TEXT NOT NULL CHECK (action_type IN ('DIVIDEND', 'SPLIT')),
                     value REAL NOT NULL,
                     source TEXT NOT NULL DEFAULT 'yfinance',
+                    period TEXT NOT NULL DEFAULT '',
+                    payment_date TEXT NOT NULL DEFAULT '',
+                    announcement_status TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(symbol, action_date, action_type, value, source)
                 );
@@ -110,6 +116,21 @@ class Database:
                     "ALTER TABLE instruments ADD COLUMN "
                     "product_category TEXT NOT NULL DEFAULT 'OTHER'"
                 )
+
+
+            # v1.4：Yahoo 台灣股利頁補強所需欄位。
+            for column, definition in (
+                ('period', "TEXT NOT NULL DEFAULT ''"),
+                ('payment_date', "TEXT NOT NULL DEFAULT ''"),
+                ('announcement_status', "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if not self._column_exists(
+                    connection, 'corporate_actions', column
+                ):
+                    connection.execute(
+                        f'ALTER TABLE corporate_actions ADD COLUMN '
+                        f'{column} {definition}'
+                    )
 
     @staticmethod
     def _instrument_values(instruments: list[Instrument]) -> list[tuple]:
@@ -355,42 +376,83 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    @staticmethod
+    def _action_values(actions: list[CorporateAction]) -> list[tuple]:
+        return [
+            (
+                item.symbol,
+                item.stock_code,
+                item.stock_name,
+                item.action_date,
+                item.action_type,
+                item.value,
+                item.source,
+                item.period,
+                item.payment_date,
+                item.announcement_status,
+            )
+            for item in actions
+        ]
+
+    @staticmethod
+    def _insert_actions(
+        connection: sqlite3.Connection,
+        actions: list[CorporateAction],
+    ) -> None:
+        if not actions:
+            return
+        connection.executemany(
+            '''INSERT INTO corporate_actions (
+                   symbol, stock_code, stock_name, action_date,
+                   action_type, value, source, period,
+                   payment_date, announcement_status
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(symbol, action_date, action_type, value, source)
+               DO UPDATE SET
+                   stock_code = excluded.stock_code,
+                   stock_name = excluded.stock_name,
+                   period = excluded.period,
+                   payment_date = excluded.payment_date,
+                   announcement_status = excluded.announcement_status,
+                   updated_at = CURRENT_TIMESTAMP''',
+            Database._action_values(actions),
+        )
+
     def replace_actions_for_symbol(
         self,
         symbol: str,
         actions: list[CorporateAction],
     ) -> None:
+        """更新該商品的 yfinance 歷史股利／分割資料。"""
         with self._connect() as connection:
             connection.execute(
                 "DELETE FROM corporate_actions "
                 "WHERE symbol = ? AND source = 'yfinance'",
                 (symbol,),
             )
-            connection.executemany(
-                '''INSERT OR IGNORE INTO corporate_actions (
-                       symbol, stock_code, stock_name, action_date,
-                       action_type, value, source
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                [
-                    (
-                        item.symbol,
-                        item.stock_code,
-                        item.stock_name,
-                        item.action_date,
-                        item.action_type,
-                        item.value,
-                        item.source,
-                    )
-                    for item in actions
-                ],
+            self._insert_actions(connection, actions)
+
+    def replace_scraped_dividends_for_symbol(
+        self,
+        symbol: str,
+        actions: list[CorporateAction],
+    ) -> None:
+        """更新 Yahoo 台灣股利政策頁解析出的已公告現金股利。"""
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM corporate_actions "
+                "WHERE symbol = ? AND source = 'yahoo_tw_scraper'",
+                (symbol,),
             )
+            self._insert_actions(connection, actions)
 
     def list_actions(
         self,
         action_type: str | None = None,
     ) -> list[CorporateAction]:
         sql = '''SELECT symbol, stock_code, stock_name, action_date,
-                        action_type, value, source
+                        action_type, value, source, period,
+                        payment_date, announcement_status
                  FROM corporate_actions'''
         params: tuple = ()
         if action_type:

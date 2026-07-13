@@ -291,16 +291,19 @@ class PortfolioApp:
                 padx=(3, 2),
                 sticky='e',
             )
-            ttk.Entry(
+            entry = ttk.Entry(
                 frame,
                 textvariable=variable,
                 width=width,
                 state=state,
-            ).grid(
+            )
+            entry.grid(
                 row=0,
                 column=index * 2 + 1,
                 padx=(0, 7),
             )
+            if label == '股票代號':
+                self.stock_code_entry = entry
 
         ttk.Label(frame, text='市場').grid(
             row=1, column=0, pady=(8, 0), sticky='e'
@@ -355,7 +358,7 @@ class PortfolioApp:
             ),
             ('② 更新全部商品行情', self.sync_all_quotes_async),
             ('更新持股行情', self.sync_holding_quotes_async),
-            ('③ 更新持股股利／分割', self.sync_actions_async),
+            ('③ 更新持股股利／分割＋已公告股利', self.sync_actions_async),
         ]
         for index, (text, command) in enumerate(button_specs):
             button = ttk.Button(
@@ -407,6 +410,7 @@ class PortfolioApp:
 
         holding_tab = ttk.Frame(self.main_notebook, padding=7)
         dividend_tab = ttk.Frame(self.main_notebook, padding=7)
+        self.dividend_tab = dividend_tab
         data_tab = ttk.Frame(self.main_notebook, padding=7)
         self.log_tab = ttk.Frame(self.main_notebook, padding=7)
 
@@ -419,6 +423,9 @@ class PortfolioApp:
         self._build_dividend_tab(dividend_tab)
         self._build_loaded_data_tab(data_tab)
         self._build_log_tab(self.log_tab)
+        self.main_notebook.bind(
+            '<<NotebookTabChanged>>', self._on_main_tab_changed
+        )
 
     def _create_tree(
         self,
@@ -509,7 +516,7 @@ class PortfolioApp:
         ttk.Label(
             controls,
             text=(
-                '已實現＝Yahoo 除息日已到；未領＝未來事件或歷史模式估算。'
+                '已實現優先依現金發放日判定；未領包含已公告未發放與歷史模式估算。'
                 '金額均依目前持股股數估算，不等同券商實際入帳。'
             ),
             foreground=self.colors['muted'],
@@ -549,6 +556,7 @@ class PortfolioApp:
             ).pack(pady=(4, 0))
 
         pane = ttk.Panedwindow(parent, orient='vertical')
+        self.dividend_pane = pane
         pane.pack(fill='both', expand=True)
 
         chart_frame = ttk.LabelFrame(
@@ -557,11 +565,11 @@ class PortfolioApp:
             padding=5,
         )
         tables_frame = ttk.Frame(pane)
-        pane.add(chart_frame, weight=3)
+        pane.add(chart_frame, weight=5)
         pane.add(tables_frame, weight=2)
 
         self.dividend_figure = Figure(
-            figsize=(12.8, 3.6),
+            figsize=(13.6, 5.0),
             dpi=100,
             facecolor=self.colors['surface'],
         )
@@ -570,9 +578,12 @@ class PortfolioApp:
             self.dividend_figure,
             master=chart_frame,
         )
-        self.dividend_canvas.get_tk_widget().pack(
-            fill='both', expand=True
-        )
+        chart_widget = self.dividend_canvas.get_tk_widget()
+        chart_widget.configure(height=470)
+        chart_widget.pack(fill='both', expand=True)
+
+        # 第一次顯示時給圖表較大的垂直空間，仍可由使用者拖曳分隔線調整。
+        self.root.after_idle(self._set_default_dividend_sash)
         self.dividend_canvas.mpl_connect(
             'motion_notify_event', self._on_dividend_chart_hover
         )
@@ -666,19 +677,19 @@ class PortfolioApp:
 
         columns = (
             'month', 'status', 'symbol', 'name', 'shares', 'dps',
-            'amount', 'basis', 'reference',
+            'amount', 'period', 'basis', 'reference', 'payment',
         )
         headings = dict(zip(
             columns,
             (
                 '月份', '狀態', 'Yahoo Symbol', '名稱', '股數', '每股股利',
-                '預估金額', '依據', '參考除息日',
+                '預估金額', '所屬期間', '依據', '除息日', '現金發放日',
             ),
         ))
         widths = {
             'month': 90, 'status': 105, 'symbol': 105, 'name': 145,
-            'shares': 90, 'dps': 100, 'amount': 120,
-            'basis': 210, 'reference': 110,
+            'shares': 90, 'dps': 100, 'amount': 120, 'period': 95,
+            'basis': 250, 'reference': 105, 'payment': 105,
         }
         self.dividend_tree = self._create_tree(
             detail_tab, columns, headings, widths
@@ -723,7 +734,7 @@ class PortfolioApp:
         ).pack(side='left', padx=3)
         ttk.Button(
             controls,
-            text='匯出公司行動 CSV',
+            text='匯出股利／分割 CSV',
             command=lambda: self.export_table('actions'),
         ).pack(side='left', padx=3)
         ttk.Label(
@@ -790,18 +801,20 @@ class PortfolioApp:
         )
 
         columns = (
-            'date', 'symbol', 'code', 'name', 'type', 'value', 'source',
+            'date', 'payment', 'period', 'symbol', 'code', 'name',
+            'type', 'value', 'status', 'source',
         )
         headings = dict(zip(
             columns,
             (
-                '日期', 'Yahoo Symbol', '代號', '名稱',
-                '類型', '數值', '來源',
+                '除息／事件日', '現金發放日', '所屬期間', 'Yahoo Symbol',
+                '代號', '名稱', '類型', '數值', '公告狀態', '來源',
             ),
         ))
         widths = {
-            'date': 105, 'symbol': 110, 'code': 80,
-            'name': 180, 'type': 160, 'value': 110, 'source': 90,
+            'date': 105, 'payment': 105, 'period': 90, 'symbol': 110,
+            'code': 80, 'name': 170, 'type': 145, 'value': 95,
+            'status': 115, 'source': 135,
         }
         self.action_tree = self._create_tree(
             action_tab, columns, headings, widths
@@ -997,10 +1010,12 @@ class PortfolioApp:
 
     def sync_actions_async(self) -> None:
         self._run_background(
-            '正在更新持股股利／分割……',
+            '正在更新持股股利／分割與已公告股利……',
             lambda: self.sync_service.sync_holding_actions(self._progress),
             lambda result: self._after_sync(
-                f'公司行動：{result[0]} 筆，失敗商品 {result[1]} 檔'
+                f'歷史股利／分割 {result[0]} 筆；'
+                f'Yahoo 台灣股利政策 {result[1]} 筆；'
+                f'最終失敗項目 {result[2]} 個'
             ),
         )
 
@@ -1086,6 +1101,7 @@ class PortfolioApp:
         self.status_var.set(f'已儲存 {symbol}')
         self.clear_form()
         self.refresh_all_views()
+        self.root.after_idle(self._focus_stock_code_entry)
 
     def delete_selected_holding(self) -> None:
         selected = self.holding_tree.selection()
@@ -1130,6 +1146,40 @@ class PortfolioApp:
         for variable in variables:
             variable.set('')
         self.market_var.set(MARKET_CHOICES['AUTO'])
+
+    def _focus_stock_code_entry(self) -> None:
+        """儲存完成後將輸入焦點移回股票代號，方便連續輸入。"""
+        entry = getattr(self, 'stock_code_entry', None)
+        if entry is not None:
+            entry.focus_set()
+            entry.icursor('end')
+
+    def _set_default_dividend_sash(self) -> None:
+        """提高圖表區預設高度，避免標題、數值及圖例被裁切。"""
+        pane = getattr(self, 'dividend_pane', None)
+        if pane is None:
+            return
+        pane.update_idletasks()
+        height = pane.winfo_height()
+        if height < 350:
+            return
+        try:
+            # 圖表約使用 68% 高度，並至少為下方表格保留 190px。
+            position = min(max(int(height * 0.68), 420), height - 190)
+            pane.sashpos(0, position)
+        except tk.TclError:
+            pass
+
+    def _on_main_tab_changed(self, _event=None) -> None:
+        """切換到配息分頁時，再依實際可用高度設定分隔位置。"""
+        try:
+            selected = self.main_notebook.nametowidget(
+                self.main_notebook.select()
+            )
+        except (tk.TclError, KeyError):
+            return
+        if selected is getattr(self, 'dividend_tab', None):
+            self.root.after(80, self._set_default_dividend_sash)
 
     def refresh_all_views(self) -> None:
         self.refresh_holding_view()
@@ -1274,8 +1324,10 @@ class PortfolioApp:
                     f'{item.shares:,}',
                     decimal(item.dividend_per_share, 4),
                     f'NT$ {money(item.estimated_amount)}',
+                    item.period or '-',
                     item.basis,
                     item.reference_date,
+                    item.payment_date or '-',
                 ),
                 tags=(item.status,),
             )
@@ -1336,7 +1388,7 @@ class PortfolioApp:
 
         - 每一種顏色代表一檔持股。
         - 實心代表已實現。
-        - 半透明斜線代表未領或歷史模式估算。
+        - 半透明斜線代表已公告未發放或歷史模式估算。
         """
         ax = self.dividend_ax
         ax.clear()
@@ -1473,19 +1525,26 @@ class PortfolioApp:
                     edgecolor='#475569',
                     hatch='///',
                     alpha=0.65,
-                    label='斜線＝未領／估算',
+                    label='斜線＝未領／公告／估算',
                 ),
             ])
+            legend_columns = 2 if len(legend_handles) > 9 else 1
             ax.legend(
                 handles=legend_handles,
                 loc='upper left',
-                bbox_to_anchor=(1.005, 1.02),
+                bbox_to_anchor=(1.005, 1.0),
                 fontsize=8,
                 frameon=False,
-                ncol=1,
+                ncol=legend_columns,
+                columnspacing=0.9,
+                handletextpad=0.5,
+                labelspacing=0.55,
             )
             self.dividend_figure.subplots_adjust(
-                left=0.07, right=0.79, top=0.88, bottom=0.16
+                left=0.065,
+                right=0.70 if legend_columns == 2 else 0.79,
+                top=0.90,
+                bottom=0.14,
             )
         else:
             ax.text(
@@ -1499,7 +1558,7 @@ class PortfolioApp:
                 fontsize=12,
             )
             self.dividend_figure.subplots_adjust(
-                left=0.07, right=0.97, top=0.86, bottom=0.16
+                left=0.065, right=0.97, top=0.90, bottom=0.14
             )
 
         self._dividend_chart_annotation = ax.annotate(
@@ -1701,21 +1760,39 @@ class PortfolioApp:
             )
 
         action_count = 0
+        source_labels = {
+            'yfinance': 'yfinance 歷史資料',
+            'yahoo_tw_scraper': 'Yahoo 台灣股利政策',
+            'projection': '歷史模式估算',
+        }
+        status_labels = {
+            'ANNOUNCED': '已公告待除息',
+            'EX_DATE_PASSED': '已除息待發放',
+            'PAID': '已發放',
+        }
         for action in self._loaded_actions:
             type_text = (
                 '現金股利'
                 if action.action_type == 'DIVIDEND'
-                else '分割／股票股利'
+                else '股票分割'
+            )
+            source_text = source_labels.get(action.source, action.source)
+            announcement_text = status_labels.get(
+                action.announcement_status,
+                action.announcement_status or '-',
             )
             if not self._matches_search(
                 query,
                 action.action_date,
+                action.payment_date,
+                action.period,
                 action.symbol,
                 action.stock_code,
                 action.stock_name,
                 type_text,
                 action.value,
-                action.source,
+                source_text,
+                announcement_text,
             ):
                 continue
             action_count += 1
@@ -1724,24 +1801,27 @@ class PortfolioApp:
                 'end',
                 values=(
                     action.action_date,
+                    action.payment_date or '-',
+                    action.period or '-',
                     action.symbol,
                     action.stock_code,
                     action.stock_name,
                     type_text,
                     decimal(action.value, 4),
-                    action.source,
+                    announcement_text,
+                    source_text,
                 ),
                 tags=(action.action_type,),
             )
 
         self.loaded_count_var.set(
             f'符合：商品 {instrument_count}／行情 {quote_count}／'
-            f'公司行動 {action_count}'
+            f'股利／分割 {action_count}'
         )
         self.status_var.set(
             f'已載入商品 {len(self._loaded_instruments)}、'
             f'行情 {len(self._loaded_quotes)}、'
-            f'公司行動 {len(self._loaded_actions)} 筆'
+            f'股利／分割 {len(self._loaded_actions)} 筆'
         )
 
     def export_table(self, table: str) -> None:
@@ -1757,7 +1837,7 @@ class PortfolioApp:
                 'SELECT * FROM market_quotes ORDER BY symbol',
             ),
             'actions': (
-                '公司行動',
+                '股利／分割資料',
                 'SELECT * FROM corporate_actions '
                 'ORDER BY action_date DESC, symbol',
             ),

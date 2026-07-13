@@ -1,8 +1,11 @@
-"""協調 yfinance、SQLite 與 GUI 的同步流程。"""
+"""協調 yfinance、Yahoo 台灣股利頁、SQLite 與 GUI 的同步流程。"""
 
 from collections.abc import Callable
+import time
 
+from app.api.yahoo_tw_dividend_scraper import YahooTwDividendScraper
 from app.api.yfinance_client import YFinanceClient
+from app.config import HTTP_ITEM_RETRIES, RETRY_BACKOFF_SECONDS
 from app.db.database import Database
 from app.models import Instrument
 
@@ -14,9 +17,11 @@ class SyncService:
         self,
         database: Database,
         client: YFinanceClient | None = None,
+        dividend_scraper: YahooTwDividendScraper | None = None,
     ) -> None:
         self.database = database
         self.client = client or YFinanceClient()
+        self.dividend_scraper = dividend_scraper or YahooTwDividendScraper()
 
     def discover_universe(
         self,
@@ -76,7 +81,8 @@ class SyncService:
         self.database.add_sync_log(
             'QUOTES',
             'SUCCESS' if quotes else 'FAILED',
-            f'success={len(quotes)}, failed={len(failed)}',
+            f'success={len(quotes)}, failed={len(failed)}, '
+            f'failed_symbols={failed[:50]}',
         )
         return len(quotes), len(failed)
 
@@ -101,47 +107,193 @@ class SyncService:
         self.database.upsert_quotes(quotes)
         return len(quotes), len(failed)
 
+    def _resolve_holding_instrument_with_retry(
+        self,
+        stock_code: str,
+        market_segment: str,
+        symbol_hint: str,
+        progress: ProgressCallback | None,
+    ) -> Instrument:
+        """清冊缺少持股商品時，最多重試三次解析。"""
+        last_error: Exception | None = None
+        for attempt in range(1, HTTP_ITEM_RETRIES + 1):
+            try:
+                return self.resolve_and_save_instrument(
+                    stock_code,
+                    market_segment,
+                )
+            except Exception as exc:
+                last_error = exc
+                if progress:
+                    progress(
+                        f'解析商品 {symbol_hint} 第 {attempt}/'
+                        f'{HTTP_ITEM_RETRIES} 次失敗：{exc}',
+                        attempt,
+                        HTTP_ITEM_RETRIES,
+                    )
+                if attempt < HTTP_ITEM_RETRIES:
+                    time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+        raise RuntimeError(
+            f'{symbol_hint} 商品解析重試 {HTTP_ITEM_RETRIES} 次仍失敗：'
+            f'{last_error}'
+        )
+
+    def _fetch_yfinance_actions_with_retry(
+        self,
+        instrument: Instrument,
+        progress: ProgressCallback | None,
+    ):
+        """yfinance 歷史股利／分割資料最多重試三次。"""
+        last_error: Exception | None = None
+        for attempt in range(1, HTTP_ITEM_RETRIES + 1):
+            try:
+                return self.client.fetch_actions(instrument)
+            except Exception as exc:
+                last_error = exc
+                if progress:
+                    progress(
+                        f'歷史股利／分割 {instrument.symbol} 第 {attempt}/'
+                        f'{HTTP_ITEM_RETRIES} 次失敗：{exc}',
+                        attempt,
+                        HTTP_ITEM_RETRIES,
+                    )
+                if attempt < HTTP_ITEM_RETRIES:
+                    time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+        raise RuntimeError(
+            f'{instrument.symbol} 歷史股利／分割重試 '
+            f'{HTTP_ITEM_RETRIES} 次仍失敗：{last_error}'
+        )
+
     def sync_holding_actions(
         self,
         progress: ProgressCallback | None = None,
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
+        """
+        更新持股的歷史股利／分割，並以 Yahoo 台灣股利政策頁補入已公告資料。
+
+        回傳：
+        - 儲存的 yfinance 歷史股利／分割筆數
+        - Yahoo 台灣股利政策頁解析筆數
+        - 重試後仍失敗的資料項目數
+        """
         holdings = self.database.list_holdings()
-        action_count = 0
-        failed_count = 0
+        history_action_count = 0
+        announced_dividend_count = 0
+        failed_items: list[str] = []
         total = len(holdings)
 
         for index, holding in enumerate(holdings, start=1):
             if progress:
                 progress(
-                    f'公司行動 {index}/{total}：{holding.yahoo_symbol}',
+                    f'股利／分割資料 {index}/{total}：'
+                    f'{holding.yahoo_symbol} {holding.stock_name}',
                     index,
                     total,
                 )
+
             instrument = self.database.get_instrument(
                 holding.yahoo_symbol
             )
             if not instrument:
                 try:
-                    instrument = self.resolve_and_save_instrument(
+                    instrument = self._resolve_holding_instrument_with_retry(
                         holding.stock_code,
                         holding.market_segment,
+                        holding.yahoo_symbol,
+                        progress,
                     )
-                except Exception:
-                    failed_count += 1
+                except Exception as exc:
+                    failed_items.append(
+                        f'{holding.yahoo_symbol} 商品解析：{exc}'
+                    )
+                    if progress:
+                        progress(
+                            f'最終失敗：{holding.yahoo_symbol} 商品解析；{exc}',
+                            index,
+                            total,
+                        )
                     continue
 
+            # 來源一：yfinance 歷史股利與股票分割。
             try:
-                actions = self.client.fetch_actions(instrument)
-                self.database.replace_actions_for_symbol(
-                    instrument.symbol, actions
+                actions = self._fetch_yfinance_actions_with_retry(
+                    instrument,
+                    progress,
                 )
-                action_count += len(actions)
-            except Exception:
-                failed_count += 1
+                self.database.replace_actions_for_symbol(
+                    instrument.symbol,
+                    actions,
+                )
+                history_action_count += len(actions)
+                if progress:
+                    progress(
+                        f'歷史股利／分割完成：{instrument.symbol} '
+                        f'{len(actions)} 筆',
+                        index,
+                        total,
+                    )
+            except Exception as exc:
+                failed_items.append(
+                    f'{instrument.symbol} 歷史股利／分割：{exc}'
+                )
+                if progress:
+                    progress(
+                        f'最終失敗：{instrument.symbol} 歷史股利／分割；{exc}',
+                        index,
+                        total,
+                    )
 
+            # 來源二：Yahoo 台灣股利政策頁，補足尚未除息／尚未發放的公告。
+            try:
+                announced = self.dividend_scraper.fetch_dividends(
+                    instrument,
+                    progress,
+                )
+                self.database.replace_scraped_dividends_for_symbol(
+                    instrument.symbol,
+                    announced,
+                )
+                announced_dividend_count += len(announced)
+                if progress:
+                    future_count = sum(
+                        item.announcement_status in {
+                            'ANNOUNCED', 'EX_DATE_PASSED'
+                        }
+                        for item in announced
+                    )
+                    progress(
+                        f'已公告股利頁完成：{instrument.symbol} '
+                        f'{len(announced)} 筆，其中尚未發放 {future_count} 筆',
+                        index,
+                        total,
+                    )
+            except Exception as exc:
+                failed_items.append(
+                    f'{instrument.symbol} 已公告股利頁：{exc}'
+                )
+                if progress:
+                    progress(
+                        f'最終失敗：{instrument.symbol} 已公告股利頁；{exc}',
+                        index,
+                        total,
+                    )
+
+        status = 'SUCCESS' if not failed_items else 'PARTIAL'
         self.database.add_sync_log(
-            'ACTIONS',
-            'SUCCESS',
-            f'actions={action_count}, failed_symbols={failed_count}',
+            'DIVIDEND_SPLIT',
+            status,
+            f'history_actions={history_action_count}, '
+            f'announced_dividends={announced_dividend_count}, '
+            f'failed_items={failed_items[:50]}',
         )
-        return action_count, failed_count
+        if progress and failed_items:
+            progress(
+                '重試後仍失敗的項目：' + '｜'.join(failed_items[:20]),
+                total,
+                total,
+            )
+        return (
+            history_action_count,
+            announced_dividend_count,
+            len(failed_items),
+        )

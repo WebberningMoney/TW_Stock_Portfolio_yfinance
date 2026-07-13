@@ -22,6 +22,7 @@ import html
 import importlib.util
 import logging
 import re
+import time
 from typing import Any
 
 import pandas as pd
@@ -36,12 +37,14 @@ except ImportError:  # pragma: no cover
 from app.config import (
     ACTION_PERIOD,
     ENABLE_PRICE_REPAIR,
+    HTTP_ITEM_RETRIES,
     LOCALIZED_NAME_BATCH_SIZE,
     LOCALIZED_NAME_WORKERS,
     NAME_OVERRIDES_PATH,
     QUOTE_BATCH_SIZE,
     QUOTE_INTERVAL,
     QUOTE_PERIOD,
+    RETRY_BACKOFF_SECONDS,
     SCREENER_MAX_PAGES,
     SCREENER_PAGE_SIZE,
     YFINANCE_CACHE_DIR,
@@ -77,7 +80,7 @@ def _emit(
 
 
 class YFinanceClient:
-    """行情、清冊、名稱與公司行動的網路資料來源。"""
+    """行情、清冊、名稱與股利／分割資料的網路資料來源。"""
 
     def __init__(self) -> None:
         YFINANCE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -727,22 +730,60 @@ class YFinanceClient:
         instruments: list[Instrument],
         progress: ProgressCallback | None = None,
     ) -> tuple[list[MarketQuote], list[str]]:
-        """以批次下載方式取得指定商品最近行情。"""
+        """
+        以批次下載方式取得最近行情。
+
+        批次中失敗或沒有有效收盤價的商品，會再逐檔嘗試三次；LOG 會顯示
+        失敗商品及每一次重試，避免整批失敗後無法辨識問題代號。
+        """
         by_symbol = {
             item.symbol: item
             for item in instruments
             if item.symbol
         }
         symbols = sorted(by_symbol)
-        quotes: list[MarketQuote] = []
-        failed: list[str] = []
+        quotes_by_symbol: dict[str, MarketQuote] = {}
+        failed_candidates: set[str] = set()
         batches = list(chunks(symbols, QUOTE_BATCH_SIZE))
+
+        def parse_quote(symbol: str, data: pd.DataFrame) -> MarketQuote | None:
+            frame = self._extract_symbol_frame(data, symbol)
+            if frame.empty or 'Close' not in frame.columns:
+                return None
+            valid = frame.dropna(subset=['Close'])
+            if valid.empty:
+                return None
+
+            last = valid.iloc[-1]
+            previous = valid.iloc[-2] if len(valid) >= 2 else last
+            close = float(last.get('Close') or 0.0)
+            previous_close = float(previous.get('Close') or close)
+            change = close - previous_close
+            change_percent = (
+                change / previous_close * 100
+                if previous_close
+                else 0.0
+            )
+            volume = float(last.get('Volume') or 0.0)
+            instrument = by_symbol[symbol]
+            return MarketQuote(
+                symbol=symbol,
+                stock_code=instrument.stock_code,
+                name=instrument.name,
+                close=close,
+                previous_close=previous_close,
+                change=change,
+                change_percent=change_percent,
+                volume=volume,
+                trade_date=iso_date(valid.index[-1]),
+                currency=instrument.currency,
+            )
 
         for batch_index, batch in enumerate(batches, start=1):
             _emit(
                 progress,
                 f'行情下載第 {batch_index}/{len(batches)} 批，'
-                f'{len(batch)} 檔；累計成功 {len(quotes)}',
+                f'{len(batch)} 檔；累計成功 {len(quotes_by_symbol)}',
                 batch_index,
                 len(batches),
             )
@@ -761,10 +802,10 @@ class YFinanceClient:
                     multi_level_index=True,
                 )
             except Exception as exc:
-                failed.extend(batch)
+                failed_candidates.update(batch)
                 _emit(
                     progress,
-                    f'第 {batch_index} 批行情失敗：{exc}',
+                    f'第 {batch_index} 批行情失敗，將逐檔重試：{exc}',
                     batch_index,
                     len(batches),
                 )
@@ -772,60 +813,95 @@ class YFinanceClient:
 
             batch_success = 0
             for symbol in batch:
-                frame = self._extract_symbol_frame(data, symbol)
-                if frame.empty or 'Close' not in frame.columns:
-                    failed.append(symbol)
+                quote = parse_quote(symbol, data)
+                if quote is None:
+                    failed_candidates.add(symbol)
                     continue
-
-                valid = frame.dropna(subset=['Close'])
-                if valid.empty:
-                    failed.append(symbol)
-                    continue
-
-                last = valid.iloc[-1]
-                previous = valid.iloc[-2] if len(valid) >= 2 else last
-                close = float(last.get('Close') or 0.0)
-                previous_close = float(previous.get('Close') or close)
-                change = close - previous_close
-                change_percent = (
-                    change / previous_close * 100
-                    if previous_close
-                    else 0.0
-                )
-                volume = float(last.get('Volume') or 0.0)
-                instrument = by_symbol[symbol]
-
-                quotes.append(
-                    MarketQuote(
-                        symbol=symbol,
-                        stock_code=instrument.stock_code,
-                        name=instrument.name,
-                        close=close,
-                        previous_close=previous_close,
-                        change=change,
-                        change_percent=change_percent,
-                        volume=volume,
-                        trade_date=iso_date(valid.index[-1]),
-                        currency=instrument.currency,
-                    )
-                )
+                quotes_by_symbol[symbol] = quote
+                failed_candidates.discard(symbol)
                 batch_success += 1
 
             _emit(
                 progress,
                 f'第 {batch_index} 批完成：成功 {batch_success}，'
-                f'失敗 {len(batch) - batch_success}',
+                f'待重試 {len(batch) - batch_success}',
                 batch_index,
                 len(batches),
             )
 
+        # 批次下載失敗的商品逐檔重試，最多三次。
+        retry_symbols = sorted(
+            symbol for symbol in failed_candidates
+            if symbol not in quotes_by_symbol
+        )
+        final_failed: list[str] = []
+        for item_index, symbol in enumerate(retry_symbols, start=1):
+            success = False
+            last_error = '沒有有效收盤價'
+            for attempt in range(1, HTTP_ITEM_RETRIES + 1):
+                _emit(
+                    progress,
+                    f'行情重試 {item_index}/{len(retry_symbols)}：{symbol} '
+                    f'第 {attempt}/{HTTP_ITEM_RETRIES} 次',
+                    item_index,
+                    len(retry_symbols),
+                )
+                try:
+                    data = yf.download(
+                        tickers=[symbol],
+                        period=QUOTE_PERIOD,
+                        interval=QUOTE_INTERVAL,
+                        group_by='ticker',
+                        auto_adjust=False,
+                        actions=False,
+                        threads=False,
+                        repair=self.repair_enabled,
+                        progress=False,
+                        keepna=False,
+                        multi_level_index=True,
+                    )
+                    quote = parse_quote(symbol, data)
+                    if quote is None:
+                        raise YFinanceApiError('沒有有效收盤價')
+                    quotes_by_symbol[symbol] = quote
+                    success = True
+                    _emit(
+                        progress,
+                        f'行情重試成功：{symbol}',
+                        item_index,
+                        len(retry_symbols),
+                    )
+                    break
+                except Exception as exc:
+                    last_error = str(exc)
+                    _emit(
+                        progress,
+                        f'行情 {symbol} 第 {attempt} 次失敗：{last_error}',
+                        item_index,
+                        len(retry_symbols),
+                    )
+                    if attempt < HTTP_ITEM_RETRIES:
+                        time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+
+            if not success:
+                final_failed.append(symbol)
+                _emit(
+                    progress,
+                    f'行情最終失敗：{symbol}；重試 {HTTP_ITEM_RETRIES} 次後'
+                    f'仍無法取得（{last_error}）',
+                    item_index,
+                    len(retry_symbols),
+                )
+
+        quotes = [quotes_by_symbol[symbol] for symbol in sorted(quotes_by_symbol)]
         _emit(
             progress,
-            f'行情下載結束：成功 {len(quotes)}，失敗 {len(set(failed))}',
+            f'行情下載結束：成功 {len(quotes)}，失敗 {len(final_failed)}'
+            + (f'；失敗代號：{", ".join(final_failed[:20])}' if final_failed else ''),
             len(batches),
             len(batches),
         )
-        return quotes, sorted(set(failed))
+        return quotes, final_failed
 
     def fetch_actions(
         self,
@@ -843,7 +919,7 @@ class YFinanceClient:
             )
         except Exception as exc:
             raise YFinanceApiError(
-                f'{instrument.symbol} 公司行動下載失敗：{exc}'
+                f'{instrument.symbol} 股利／分割資料下載失敗：{exc}'
             ) from exc
 
         if history is None or history.empty:

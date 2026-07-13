@@ -4,3 +4,4 @@ scipy>=1.11
 requests>=2.32
 
 matplotlib>=3.8
+beautifulsoup4>=4.12
