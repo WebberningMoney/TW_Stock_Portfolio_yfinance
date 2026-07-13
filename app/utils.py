@@ -65,6 +65,11 @@ def iso_date(value) -> str:
         return text[:10] if len(text) >= 10 else ''
 
 
+
+def contains_cjk(value: str) -> bool:
+    """判斷文字是否包含常見中日韓統一表意文字。"""
+    return any('\u4e00' <= char <= '\u9fff' for char in str(value or ''))
+
 def money(value: float) -> str:
     return f'{value:,.0f}'
 

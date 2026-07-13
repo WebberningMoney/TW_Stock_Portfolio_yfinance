@@ -125,6 +125,42 @@ class Database:
                 ],
             )
 
+            # 清冊重新建立後，將繁中名稱同步到既有持股、行情與公司行動。
+            # 這可直接修正舊資料庫中已存下的英文名稱。
+            connection.execute(
+                """UPDATE holdings
+                   SET stock_name = (
+                       SELECT name FROM instruments
+                       WHERE instruments.symbol = holdings.yahoo_symbol
+                   ), updated_at = CURRENT_TIMESTAMP
+                   WHERE EXISTS (
+                       SELECT 1 FROM instruments
+                       WHERE instruments.symbol = holdings.yahoo_symbol
+                   )"""
+            )
+            connection.execute(
+                """UPDATE market_quotes
+                   SET name = (
+                       SELECT name FROM instruments
+                       WHERE instruments.symbol = market_quotes.symbol
+                   ), updated_at = CURRENT_TIMESTAMP
+                   WHERE EXISTS (
+                       SELECT 1 FROM instruments
+                       WHERE instruments.symbol = market_quotes.symbol
+                   )"""
+            )
+            connection.execute(
+                """UPDATE corporate_actions
+                   SET stock_name = (
+                       SELECT name FROM instruments
+                       WHERE instruments.symbol = corporate_actions.symbol
+                   ), updated_at = CURRENT_TIMESTAMP
+                   WHERE EXISTS (
+                       SELECT 1 FROM instruments
+                       WHERE instruments.symbol = corporate_actions.symbol
+                   )"""
+            )
+
     def list_instruments(self) -> list[Instrument]:
         with self._connect() as connection:
             rows = connection.execute(

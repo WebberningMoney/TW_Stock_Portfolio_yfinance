@@ -65,7 +65,7 @@ class PortfolioApp:
         fields = [
             ('股票代號', self.stock_code_var, 10, 'normal'),
             ('Yahoo Symbol', self.yahoo_symbol_var, 13, 'readonly'),
-            ('股票名稱', self.stock_name_var, 20, 'readonly'),
+            ('股票名稱', self.stock_name_var, 20, 'normal'),
             ('持有股數', self.shares_var, 12, 'normal'),
             ('持有總成本', self.total_cost_var, 15, 'normal'),
         ]
@@ -96,13 +96,13 @@ class PortfolioApp:
     def _build_sync_panel(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text='yfinance 資料同步', padding=8)
         frame.pack(fill='x', pady=(0, 8))
-        ttk.Button(frame, text='① 建立 Yahoo 台灣商品清冊', command=self.discover_universe_async).pack(side='left', padx=4)
+        ttk.Button(frame, text='① 建立 Yahoo 台灣商品清冊／繁中名稱', command=self.discover_universe_async).pack(side='left', padx=4)
         ttk.Button(frame, text='② 更新全部商品行情', command=self.sync_all_quotes_async).pack(side='left', padx=4)
         ttk.Button(frame, text='更新持股行情', command=self.sync_holding_quotes_async).pack(side='left', padx=4)
         ttk.Button(frame, text='③ 更新持股股利／分割', command=self.sync_actions_async).pack(side='left', padx=4)
         ttk.Label(
             frame,
-            text='全市場行情可批次下載；完整公司行動只同步持股，以降低 Yahoo 限流風險。',
+            text='繁中名稱優先使用 Yahoo 台灣資料；缺漏可編輯 data/name_overrides.csv。',
         ).pack(side='left', padx=14)
 
     def _build_summary(self, parent: ttk.Frame) -> None:

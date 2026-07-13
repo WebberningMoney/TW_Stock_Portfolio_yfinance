@@ -17,22 +17,43 @@ yfinance 資料核心。
 from __future__ import annotations
 
 from collections.abc import Callable
+import csv
+import importlib.util
+import logging
 from typing import Any
 
 import pandas as pd
 import yfinance as yf
 
+try:
+    # 使用 yfinance 自己的 cookie／crumb／重試傳輸層。
+    # 這是內部介面，因此所有呼叫都有例外 fallback。
+    from yfinance.data import YfData
+except ImportError:  # pragma: no cover - 僅舊版 yfinance
+    YfData = None
+
 from app.config import (
     ACTION_PERIOD,
+    ENABLE_PRICE_REPAIR,
+    LOCALIZED_NAME_BATCH_SIZE,
+    NAME_OVERRIDES_PATH,
     QUOTE_BATCH_SIZE,
     QUOTE_INTERVAL,
     QUOTE_PERIOD,
     SCREENER_MAX_PAGES,
     SCREENER_PAGE_SIZE,
     YFINANCE_CACHE_DIR,
+    YAHOO_LOCALIZED_QUOTE_URL,
 )
 from app.models import CorporateAction, Instrument, MarketQuote
-from app.utils import chunks, iso_date, market_from_symbol, normalize_stock_code, stock_code_from_symbol
+from app.utils import (
+    chunks,
+    contains_cjk,
+    iso_date,
+    market_from_symbol,
+    normalize_stock_code,
+    stock_code_from_symbol,
+)
 
 ProgressCallback = Callable[[str], None]
 
@@ -51,6 +72,130 @@ class YFinanceClient:
         except Exception:
             # 舊版 yfinance 若不支援或快取初始化失敗，不阻止主程式。
             pass
+
+        # yfinance 的 repair=True 會延遲載入 SciPy。舊版專案沒有把 SciPy
+        # 列為依賴，導致每一批下載都失敗。現在先檢查，缺少時自動關閉修復。
+        self.repair_enabled = bool(
+            ENABLE_PRICE_REPAIR
+            and importlib.util.find_spec('scipy') is not None
+        )
+
+        # 避免 yfinance 對每一檔失敗商品在 Terminal 列出數百行訊息；
+        # 真正的成功／失敗筆數仍由 GUI 狀態與同步紀錄呈現。
+        logging.getLogger('yfinance').setLevel(logging.CRITICAL)
+
+        self._yf_data = None
+        if YfData is not None:
+            try:
+                self._yf_data = YfData()
+            except Exception:
+                self._yf_data = None
+
+        self._ensure_name_override_template()
+
+    @staticmethod
+    def _ensure_name_override_template() -> None:
+        """建立可由使用者自行補充的繁中名稱 CSV。"""
+        NAME_OVERRIDES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if NAME_OVERRIDES_PATH.exists():
+            return
+        NAME_OVERRIDES_PATH.write_text(
+            'symbol,name\n'
+            '0050.TW,元大台灣50\n'
+            '0056.TW,元大高股息\n'
+            '00919.TW,群益台灣精選高息\n',
+            encoding='utf-8-sig',
+        )
+
+    @staticmethod
+    def _load_name_overrides() -> dict[str, str]:
+        """讀取 data/name_overrides.csv；使用者可自行增加或修正名稱。"""
+        if not NAME_OVERRIDES_PATH.exists():
+            return {}
+        result: dict[str, str] = {}
+        try:
+            with NAME_OVERRIDES_PATH.open('r', encoding='utf-8-sig', newline='') as file:
+                for row in csv.DictReader(file):
+                    symbol = str(row.get('symbol') or '').strip().upper()
+                    name = str(row.get('name') or '').strip()
+                    if symbol and name:
+                        result[symbol] = name
+        except (OSError, csv.Error):
+            return {}
+        return result
+
+    def _fetch_localized_names(
+        self,
+        symbols: list[str],
+        progress: ProgressCallback | None = None,
+    ) -> dict[str, str]:
+        """
+        批次向 Yahoo Finance 要求台灣繁中名稱。
+
+        yfinance 的 Screener/Search 公開介面沒有 lang/region 參數，
+        因此這裡沿用 yfinance 的 YfData 傳輸層（cookie、crumb、重試），
+        呼叫 Yahoo quote JSON 並指定 zh-TW、TW。失敗時保留英文名稱。
+        """
+        if not symbols or self._yf_data is None:
+            return {}
+
+        result: dict[str, str] = {}
+        batches = chunks(sorted(set(symbols)), LOCALIZED_NAME_BATCH_SIZE)
+        for batch_index, batch in enumerate(batches, start=1):
+            if progress:
+                progress(f'補強繁中名稱第 {batch_index} 批，共 {len(batch)} 檔')
+            params = {
+                'symbols': ','.join(batch),
+                'lang': 'zh-TW',
+                'region': 'TW',
+                'corsDomain': 'tw.finance.yahoo.com',
+            }
+            try:
+                payload = self._yf_data.get_raw_json(
+                    YAHOO_LOCALIZED_QUOTE_URL,
+                    params=params,
+                    timeout=30,
+                )
+            except Exception:
+                continue
+
+            rows = (
+                payload.get('quoteResponse', {}).get('result', [])
+                if isinstance(payload, dict)
+                else []
+            )
+            for row in rows:
+                symbol = str(row.get('symbol') or '').strip().upper()
+                name = str(
+                    row.get('longName')
+                    or row.get('shortName')
+                    or row.get('displayName')
+                    or ''
+                ).strip()
+                # 只有真的取得中文時才覆蓋 Screener 的英文名稱。
+                if symbol and name and contains_cjk(name):
+                    result[symbol] = name
+
+        return result
+
+    def _apply_preferred_names(
+        self,
+        instruments: list[Instrument],
+        progress: ProgressCallback | None = None,
+    ) -> list[Instrument]:
+        """名稱優先序：手動 CSV > Yahoo 台灣繁中名稱 > Yahoo 英文名稱。"""
+        if not instruments:
+            return instruments
+        localized = self._fetch_localized_names(
+            [item.symbol for item in instruments], progress
+        )
+        overrides = self._load_name_overrides()
+        for item in instruments:
+            item.name = overrides.get(
+                item.symbol,
+                localized.get(item.symbol, item.name),
+            )
+        return instruments
 
     @staticmethod
     def _instrument_from_quote(quote: dict[str, Any]) -> Instrument | None:
@@ -158,7 +303,8 @@ class YFinanceClient:
 
         if not result and errors:
             raise YFinanceApiError('；'.join(errors))
-        return sorted(result.values(), key=lambda item: item.symbol)
+        instruments = sorted(result.values(), key=lambda item: item.symbol)
+        return self._apply_preferred_names(instruments, progress)
 
     def resolve_instrument(
         self,
@@ -203,7 +349,7 @@ class YFinanceClient:
                     interval='1d',
                     auto_adjust=False,
                     actions=False,
-                    repair=True,
+                    repair=self.repair_enabled,
                     raise_errors=False,
                 )
                 if history is None or history.empty or 'Close' not in history.columns:
@@ -227,7 +373,7 @@ class YFinanceClient:
                 if market_segment == 'EMERGING':
                     segment = 'EMERGING'
 
-                return Instrument(
+                instrument = Instrument(
                     symbol=symbol,
                     stock_code=code,
                     name=name,
@@ -236,6 +382,7 @@ class YFinanceClient:
                     quote_type=quote_type,
                     currency=currency,
                 )
+                return self._apply_preferred_names([instrument])[0]
             except Exception:
                 continue
 
@@ -282,7 +429,7 @@ class YFinanceClient:
                     auto_adjust=False,
                     actions=False,
                     threads=min(8, len(batch)),
-                    repair=True,
+                    repair=self.repair_enabled,
                     progress=False,
                     keepna=False,
                     multi_level_index=True,
@@ -346,7 +493,7 @@ class YFinanceClient:
                 interval='1d',
                 auto_adjust=False,
                 actions=True,
-                repair=True,
+                repair=self.repair_enabled,
                 raise_errors=False,
             )
         except Exception as exc:

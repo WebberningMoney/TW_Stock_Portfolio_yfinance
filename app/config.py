@@ -6,7 +6,7 @@
 
 from pathlib import Path
 
-APP_TITLE = '台股庫存、損益與配息管理（yfinance）'
+APP_TITLE = '台股庫存、損益與配息管理（yfinance v1.1）'
 WINDOW_SIZE = '1480x880'
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -20,7 +20,7 @@ SCREENER_PAGE_SIZE = 250
 SCREENER_MAX_PAGES = 30
 
 # yf.download 批次太大較容易被 Yahoo 限流；100 檔是保守折衷。
-QUOTE_BATCH_SIZE = 100
+QUOTE_BATCH_SIZE = 50
 QUOTE_PERIOD = '1mo'
 QUOTE_INTERVAL = '1d'
 
@@ -33,3 +33,14 @@ MARKET_CHOICES = {
     'TPEX': '上櫃／上櫃 ETF（.TWO）',
     'EMERGING': '興櫃（通常為 .TWO，Yahoo 覆蓋不保證）',
 }
+
+
+# Yahoo 全球 Screener 通常回傳英文名稱。程式會透過同一個 Yahoo/yfinance
+# 傳輸層，批次要求 zh-TW / TW 的本地化名稱；若 Yahoo 未提供則保留英文。
+LOCALIZED_NAME_BATCH_SIZE = 50
+YAHOO_LOCALIZED_QUOTE_URL = 'https://query1.finance.yahoo.com/v7/finance/quote'
+NAME_OVERRIDES_PATH = DATA_DIR / 'name_overrides.csv'
+
+# repair=True 可改善部分非美國市場價格／股利異常，但需要 SciPy。
+# 程式會自動檢查 SciPy；未安裝時自動改用 repair=False，避免整批下載失敗。
+ENABLE_PRICE_REPAIR = True
