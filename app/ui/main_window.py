@@ -8,16 +8,27 @@ from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
+from matplotlib import colormaps, font_manager, rcParams
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+from matplotlib.patches import Patch
+from matplotlib.ticker import FuncFormatter
+
 from app.config import (
     EXPORT_DIR,
     MARKET_CHOICES,
+    MARKET_LABEL_TO_KEY,
     UNIVERSE_CATEGORY_CHOICES,
 )
 from app.db.database import Database
 from app.models import Holding
 from app.services.dividend_service import (
+    PENDING,
+    REALIZED,
     build_dividend_projection,
+    group_month_components,
     summarize_monthly,
+    summarize_year,
 )
 from app.services.portfolio_service import (
     build_holding_views,
@@ -39,16 +50,23 @@ class PortfolioApp:
         self.stock_code_var = tk.StringVar()
         self.yahoo_symbol_var = tk.StringVar()
         self.stock_name_var = tk.StringVar()
-        self.market_var = tk.StringVar(value='AUTO')
+        self.market_var = tk.StringVar(value=MARKET_CHOICES['AUTO'])
         self.shares_var = tk.StringVar()
         self.total_cost_var = tk.StringVar()
         self.dividend_year_var = tk.StringVar(value=str(date.today().year))
+        self.dividend_month_var = tk.StringVar(
+            value=f'{date.today().year}-{date.today().month:02d}'
+        )
         self.status_var = tk.StringVar(value='就緒')
 
         self.summary_cost_var = tk.StringVar(value='NT$ 0')
         self.summary_value_var = tk.StringVar(value='NT$ 0')
         self.summary_profit_var = tk.StringVar(value='NT$ 0')
         self.summary_return_var = tk.StringVar(value='0.00%')
+
+        self.dividend_realized_var = tk.StringVar(value='NT$ 0')
+        self.dividend_pending_var = tk.StringVar(value='NT$ 0')
+        self.dividend_total_var = tk.StringVar(value='NT$ 0')
 
         self.loaded_search_var = tk.StringVar()
         self.loaded_count_var = tk.StringVar(value='')
@@ -57,6 +75,10 @@ class PortfolioApp:
         self._loaded_instruments = []
         self._loaded_quotes: list[dict] = []
         self._loaded_actions = []
+        self._dividend_projections = []
+        self._dividend_month_groups = {}
+        self._dividend_chart_annotation = None
+        self._dividend_month_patches: dict[int, list] = {}
 
         self._build_style()
         self._build_layout()
@@ -66,10 +88,180 @@ class PortfolioApp:
         self.refresh_all_views()
 
     def _build_style(self) -> None:
+        """建立較柔和的藍灰色介面，並保留台股紅漲綠跌慣例。"""
+        self.colors = {
+            'background': '#F3F6FA',
+            'surface': '#FFFFFF',
+            'primary': '#2563EB',
+            'primary_dark': '#1D4ED8',
+            'accent': '#0EA5E9',
+            'text': '#1F2937',
+            'muted': '#64748B',
+            'border': '#D8E1EC',
+            'positive': '#C62828',
+            'negative': '#16803C',
+            'neutral': '#475569',
+            'realized': '#2563EB',
+            'pending': '#F59E0B',
+            'total': '#7C3AED',
+        }
+
+        # 優先使用作業系統內建的繁中文字型，避免 Matplotlib 中文亂碼。
+        available_fonts = {
+            font.name for font in font_manager.fontManager.ttflist
+        }
+        for candidate in (
+            'PingFang TC',
+            'Heiti TC',
+            'Microsoft JhengHei',
+            'Noto Sans CJK TC',
+            'Arial Unicode MS',
+        ):
+            if candidate in available_fonts:
+                rcParams['font.sans-serif'] = [
+                    candidate,
+                    *rcParams.get('font.sans-serif', []),
+                ]
+                break
+        rcParams['axes.unicode_minus'] = False
+
+        self.root.configure(background=self.colors['background'])
         style = ttk.Style()
-        style.configure('Summary.TLabel', font=('', 14, 'bold'))
-        style.configure('Treeview', rowheight=27)
-        style.configure('Treeview.Heading', font=('', 10, 'bold'))
+        try:
+            style.theme_use('clam')
+        except tk.TclError:
+            pass
+
+        style.configure(
+            '.',
+            font=('', 11),
+            background=self.colors['background'],
+            foreground=self.colors['text'],
+        )
+        style.configure(
+            'TFrame', background=self.colors['background']
+        )
+        style.configure(
+            'Card.TFrame', background=self.colors['surface']
+        )
+        style.configure(
+            'TLabel',
+            background=self.colors['background'],
+            foreground=self.colors['text'],
+        )
+        style.configure(
+            'Card.TLabel',
+            background=self.colors['surface'],
+            foreground=self.colors['text'],
+        )
+        style.configure(
+            'TLabelframe',
+            background=self.colors['background'],
+            bordercolor=self.colors['border'],
+        )
+        style.configure(
+            'TLabelframe.Label',
+            background=self.colors['background'],
+            foreground=self.colors['primary_dark'],
+            font=('', 11, 'bold'),
+        )
+        style.configure(
+            'TButton',
+            padding=(10, 6),
+            background='#E8EEF8',
+            foreground=self.colors['text'],
+            bordercolor=self.colors['border'],
+        )
+        style.map(
+            'TButton',
+            background=[('active', '#DBE7F8')],
+        )
+        style.configure(
+            'Accent.TButton',
+            background=self.colors['primary'],
+            foreground='#FFFFFF',
+            bordercolor=self.colors['primary'],
+            font=('', 11, 'bold'),
+        )
+        style.map(
+            'Accent.TButton',
+            background=[('active', self.colors['primary_dark'])],
+            foreground=[('disabled', '#E5E7EB')],
+        )
+        style.configure(
+            'Summary.TLabel',
+            font=('', 15, 'bold'),
+            background=self.colors['surface'],
+            foreground=self.colors['text'],
+        )
+        style.configure(
+            'Positive.Summary.TLabel',
+            font=('', 15, 'bold'),
+            background=self.colors['surface'],
+            foreground=self.colors['positive'],
+        )
+        style.configure(
+            'Negative.Summary.TLabel',
+            font=('', 15, 'bold'),
+            background=self.colors['surface'],
+            foreground=self.colors['negative'],
+        )
+        style.configure(
+            'Realized.Summary.TLabel',
+            font=('', 15, 'bold'),
+            background=self.colors['surface'],
+            foreground=self.colors['realized'],
+        )
+        style.configure(
+            'Pending.Summary.TLabel',
+            font=('', 15, 'bold'),
+            background=self.colors['surface'],
+            foreground=self.colors['pending'],
+        )
+        style.configure(
+            'Total.Summary.TLabel',
+            font=('', 15, 'bold'),
+            background=self.colors['surface'],
+            foreground=self.colors['total'],
+        )
+        style.configure(
+            'Treeview',
+            rowheight=28,
+            background=self.colors['surface'],
+            fieldbackground=self.colors['surface'],
+            foreground=self.colors['text'],
+            bordercolor=self.colors['border'],
+        )
+        style.configure(
+            'Treeview.Heading',
+            font=('', 10, 'bold'),
+            background='#E9EFF8',
+            foreground=self.colors['primary_dark'],
+        )
+        style.map(
+            'Treeview',
+            background=[('selected', '#D9E8FF')],
+            foreground=[('selected', self.colors['text'])],
+        )
+        style.configure(
+            'Horizontal.TProgressbar',
+            troughcolor='#DDE5F0',
+            background=self.colors['primary'],
+            bordercolor=self.colors['border'],
+            lightcolor=self.colors['primary'],
+            darkcolor=self.colors['primary_dark'],
+        )
+        style.configure(
+            'TNotebook', background=self.colors['background']
+        )
+        style.configure(
+            'TNotebook.Tab', padding=(14, 7)
+        )
+        style.map(
+            'TNotebook.Tab',
+            background=[('selected', '#DDEAFF')],
+            foreground=[('selected', self.colors['primary_dark'])],
+        )
 
     def _build_layout(self) -> None:
         outer = ttk.Frame(self.root, padding=12)
@@ -116,17 +308,13 @@ class PortfolioApp:
         ttk.Combobox(
             frame,
             textvariable=self.market_var,
-            values=list(MARKET_CHOICES),
-            width=12,
+            values=list(MARKET_CHOICES.values()),
+            width=37,
             state='readonly',
-        ).grid(row=1, column=1, pady=(8, 0), sticky='w')
-        ttk.Label(
-            frame,
-            text='AUTO／TWSE／TPEX／EMERGING',
         ).grid(
             row=1,
-            column=2,
-            columnspan=2,
+            column=1,
+            columnspan=3,
             pady=(8, 0),
             sticky='w',
         )
@@ -169,8 +357,13 @@ class PortfolioApp:
             ('更新持股行情', self.sync_holding_quotes_async),
             ('③ 更新持股股利／分割', self.sync_actions_async),
         ]
-        for text, command in button_specs:
-            button = ttk.Button(frame, text=text, command=command)
+        for index, (text, command) in enumerate(button_specs):
+            button = ttk.Button(
+                frame,
+                text=text,
+                command=command,
+                style='Accent.TButton' if index == 0 else 'TButton',
+            )
             button.pack(side='left', padx=4)
             self.sync_buttons.append(button)
 
@@ -187,21 +380,26 @@ class PortfolioApp:
         )
         frame.pack(fill='x', pady=(0, 8))
         cards = [
-            ('總投入成本', self.summary_cost_var),
-            ('最新庫存總值', self.summary_value_var),
-            ('未實現損益', self.summary_profit_var),
-            ('預估報酬率', self.summary_return_var),
+            ('總投入成本', self.summary_cost_var, 'Summary.TLabel'),
+            ('最新庫存總值', self.summary_value_var, 'Summary.TLabel'),
+            ('未實現損益', self.summary_profit_var, 'Summary.TLabel'),
+            ('預估報酬率', self.summary_return_var, 'Summary.TLabel'),
         ]
-        for index, (title, variable) in enumerate(cards):
-            box = ttk.Frame(frame, padding=5)
-            box.grid(row=0, column=index, sticky='nsew', padx=12)
+        self.summary_value_labels: list[ttk.Label] = []
+        for index, (title, variable, style_name) in enumerate(cards):
+            box = ttk.Frame(frame, padding=9, style='Card.TFrame')
+            box.grid(row=0, column=index, sticky='nsew', padx=7)
             frame.columnconfigure(index, weight=1)
-            ttk.Label(box, text=title).pack()
             ttk.Label(
+                box, text=title, style='Card.TLabel'
+            ).pack()
+            value_label = ttk.Label(
                 box,
                 textvariable=variable,
-                style='Summary.TLabel',
-            ).pack(pady=(4, 0))
+                style=style_name,
+            )
+            value_label.pack(pady=(5, 0))
+            self.summary_value_labels.append(value_label)
 
     def _build_notebook(self, parent: ttk.Frame) -> None:
         self.main_notebook = ttk.Notebook(parent)
@@ -282,7 +480,7 @@ class PortfolioApp:
             ),
         ))
         widths = {
-            'symbol': 100, 'code': 75, 'name': 140, 'market': 90,
+            'symbol': 100, 'code': 75, 'name': 140, 'market': 220,
             'shares': 90, 'cost': 115, 'avg': 95, 'close': 90,
             'value': 120, 'profit': 115, 'return': 85, 'date': 100,
         }
@@ -296,7 +494,7 @@ class PortfolioApp:
     def _build_dividend_tab(self, parent) -> None:
         controls = ttk.Frame(parent)
         controls.pack(fill='x', pady=(0, 7))
-        ttk.Label(controls, text='預估年度：').pack(side='left')
+        ttk.Label(controls, text='分析年度：').pack(side='left')
         ttk.Entry(
             controls,
             textvariable=self.dividend_year_var,
@@ -306,51 +504,190 @@ class PortfolioApp:
             controls,
             text='重新計算',
             command=self.refresh_dividend_view,
+            style='Accent.TButton',
         ).pack(side='left')
         ttk.Label(
             controls,
             text=(
-                'Yahoo 股利日期通常為除息日；未來月份採最近歷史年度'
-                '模式估算，不代表實際入帳日或已公告金額。'
+                '已實現＝Yahoo 除息日已到；未領＝未來事件或歷史模式估算。'
+                '金額均依目前持股股數估算，不等同券商實際入帳。'
             ),
+            foreground=self.colors['muted'],
         ).pack(side='left', padx=16)
+
+        summary_frame = ttk.LabelFrame(
+            parent,
+            text='年度股利摘要',
+            padding=7,
+        )
+        summary_frame.pack(fill='x', pady=(0, 7))
+        dividend_cards = [
+            ('已實現股利（估算）', self.dividend_realized_var,
+             'Realized.Summary.TLabel'),
+            ('未領／預估股利', self.dividend_pending_var,
+             'Pending.Summary.TLabel'),
+            ('當年度股利總和', self.dividend_total_var,
+             'Total.Summary.TLabel'),
+        ]
+        for index, (title, variable, style_name) in enumerate(dividend_cards):
+            card = ttk.Frame(
+                summary_frame,
+                padding=8,
+                style='Card.TFrame',
+            )
+            card.grid(row=0, column=index, sticky='nsew', padx=7)
+            summary_frame.columnconfigure(index, weight=1)
+            ttk.Label(
+                card,
+                text=title,
+                style='Card.TLabel',
+            ).pack()
+            ttk.Label(
+                card,
+                textvariable=variable,
+                style=style_name,
+            ).pack(pady=(4, 0))
 
         pane = ttk.Panedwindow(parent, orient='vertical')
         pane.pack(fill='both', expand=True)
-        monthly_frame = ttk.LabelFrame(
-            pane, text='每月合計', padding=5
+
+        chart_frame = ttk.LabelFrame(
+            pane,
+            text='每月股利金額與持股組成（滑鼠移到月份可查看明細；點擊可切換月份組成）',
+            padding=5,
         )
-        detail_frame = ttk.LabelFrame(
-            pane, text='估算明細', padding=5
+        tables_frame = ttk.Frame(pane)
+        pane.add(chart_frame, weight=3)
+        pane.add(tables_frame, weight=2)
+
+        self.dividend_figure = Figure(
+            figsize=(12.8, 3.6),
+            dpi=100,
+            facecolor=self.colors['surface'],
         )
-        pane.add(monthly_frame, weight=1)
-        pane.add(detail_frame, weight=2)
+        self.dividend_ax = self.dividend_figure.add_subplot(111)
+        self.dividend_canvas = FigureCanvasTkAgg(
+            self.dividend_figure,
+            master=chart_frame,
+        )
+        self.dividend_canvas.get_tk_widget().pack(
+            fill='both', expand=True
+        )
+        self.dividend_canvas.mpl_connect(
+            'motion_notify_event', self._on_dividend_chart_hover
+        )
+        self.dividend_canvas.mpl_connect(
+            'button_press_event', self._on_dividend_chart_click
+        )
+
+        self.dividend_table_tabs = ttk.Notebook(tables_frame)
+        table_tabs = self.dividend_table_tabs
+        table_tabs.pack(fill='both', expand=True)
+        monthly_tab = ttk.Frame(table_tabs, padding=5)
+        component_tab = ttk.Frame(table_tabs, padding=5)
+        detail_tab = ttk.Frame(table_tabs, padding=5)
+        table_tabs.add(monthly_tab, text='12 個月摘要')
+        table_tabs.add(component_tab, text='選定月份組成')
+        table_tabs.add(detail_tab, text='全年股利明細')
 
         self.monthly_tree = self._create_tree(
-            monthly_frame,
-            ('month', 'amount'),
-            {'month': '月份', 'amount': '預估可領'},
-            {'month': 160, 'amount': 180},
-            height=6,
+            monthly_tab,
+            ('month', 'realized', 'pending', 'total'),
+            {
+                'month': '月份',
+                'realized': '已實現股利',
+                'pending': '未領／預估',
+                'total': '月份合計',
+            },
+            {
+                'month': 120,
+                'realized': 170,
+                'pending': 170,
+                'total': 170,
+            },
+            height=7,
         )
+        self.monthly_tree.tag_configure(
+            'has_realized', foreground=self.colors['realized']
+        )
+        self.monthly_tree.tag_configure(
+            'pending_only', foreground='#B45309'
+        )
+
+        month_controls = ttk.Frame(component_tab)
+        month_controls.pack(fill='x', pady=(0, 5))
+        ttk.Label(month_controls, text='查看月份：').pack(side='left')
+        self.dividend_month_combo = ttk.Combobox(
+            month_controls,
+            textvariable=self.dividend_month_var,
+            state='readonly',
+            width=12,
+        )
+        self.dividend_month_combo.pack(side='left')
+        self.dividend_month_combo.bind(
+            '<<ComboboxSelected>>',
+            lambda _event: self._render_dividend_month_components(),
+        )
+        ttk.Label(
+            month_controls,
+            text='長條圖中同一顏色代表同一檔持股；斜線區塊為未領／估算。',
+            foreground=self.colors['muted'],
+        ).pack(side='left', padx=12)
+
+        self.dividend_component_tree = self._create_tree(
+            component_tab,
+            ('status', 'code', 'name', 'shares', 'dps', 'amount', 'basis'),
+            {
+                'status': '狀態',
+                'code': '代號',
+                'name': '名稱',
+                'shares': '持有股數',
+                'dps': '每股股利',
+                'amount': '預估金額',
+                'basis': '依據',
+            },
+            {
+                'status': 110,
+                'code': 90,
+                'name': 160,
+                'shares': 110,
+                'dps': 110,
+                'amount': 135,
+                'basis': 210,
+            },
+            height=7,
+        )
+        self.dividend_component_tree.tag_configure(
+            REALIZED, foreground=self.colors['realized']
+        )
+        self.dividend_component_tree.tag_configure(
+            PENDING, foreground='#B45309'
+        )
+
         columns = (
-            'month', 'symbol', 'name', 'shares', 'dps',
+            'month', 'status', 'symbol', 'name', 'shares', 'dps',
             'amount', 'basis', 'reference',
         )
         headings = dict(zip(
             columns,
             (
-                '月份', 'Yahoo Symbol', '名稱', '股數', '每股股利',
-                '預估可領', '依據', '參考除息日',
+                '月份', '狀態', 'Yahoo Symbol', '名稱', '股數', '每股股利',
+                '預估金額', '依據', '參考除息日',
             ),
         ))
         widths = {
-            'month': 90, 'symbol': 100, 'name': 140,
-            'shares': 90, 'dps': 100, 'amount': 115,
-            'basis': 170, 'reference': 110,
+            'month': 90, 'status': 105, 'symbol': 105, 'name': 145,
+            'shares': 90, 'dps': 100, 'amount': 120,
+            'basis': 210, 'reference': 110,
         }
         self.dividend_tree = self._create_tree(
-            detail_frame, columns, headings, widths
+            detail_tab, columns, headings, widths
+        )
+        self.dividend_tree.tag_configure(
+            REALIZED, foreground=self.colors['realized']
+        )
+        self.dividend_tree.tag_configure(
+            PENDING, foreground='#B45309'
         )
 
     def _build_loaded_data_tab(self, parent) -> None:
@@ -416,7 +753,7 @@ class PortfolioApp:
         ))
         widths = {
             'symbol': 110, 'code': 80, 'name': 220,
-            'exchange': 100, 'market': 100, 'category': 180,
+            'exchange': 100, 'market': 230, 'category': 180,
             'type': 100, 'currency': 70,
         }
         self.instrument_tree = self._create_tree(
@@ -442,6 +779,15 @@ class PortfolioApp:
         self.quote_tree = self._create_tree(
             quote_tab, columns, headings, widths
         )
+        self.quote_tree.tag_configure(
+            'positive', foreground=self.colors['positive']
+        )
+        self.quote_tree.tag_configure(
+            'negative', foreground=self.colors['negative']
+        )
+        self.quote_tree.tag_configure(
+            'neutral', foreground=self.colors['neutral']
+        )
 
         columns = (
             'date', 'symbol', 'code', 'name', 'type', 'value', 'source',
@@ -459,6 +805,12 @@ class PortfolioApp:
         }
         self.action_tree = self._create_tree(
             action_tab, columns, headings, widths
+        )
+        self.action_tree.tag_configure(
+            'DIVIDEND', foreground=self.colors['realized']
+        )
+        self.action_tree.tag_configure(
+            'SPLIT', foreground=self.colors['total']
         )
 
     def _build_log_tab(self, parent) -> None:
@@ -489,6 +841,10 @@ class PortfolioApp:
             height=22,
             font=('Menlo', 11),
             state='disabled',
+            background='#0F172A',
+            foreground='#E2E8F0',
+            insertbackground='#FFFFFF',
+            relief='flat',
         )
         self.log_text.pack(fill='both', expand=True)
 
@@ -653,6 +1009,18 @@ class PortfolioApp:
         self._finish_operation(message)
         messagebox.showinfo('完成', message)
 
+    @staticmethod
+    def _market_label(market_key: str) -> str:
+        """將資料庫內部市場代碼轉成中文顯示。"""
+        return MARKET_CHOICES.get(market_key, market_key or MARKET_CHOICES['AUTO'])
+
+    def _selected_market_key(self) -> str:
+        """將下拉選單中文顯示值轉回內部代碼。"""
+        value = self.market_var.get().strip()
+        if value in MARKET_CHOICES:
+            return value
+        return MARKET_LABEL_TO_KEY.get(value, 'AUTO')
+
     def resolve_symbol(self) -> None:
         code = normalize_stock_code(self.stock_code_var.get())
         if not code:
@@ -661,7 +1029,7 @@ class PortfolioApp:
         self._run_background(
             f'正在解析 {code}……',
             lambda: self.sync_service.resolve_and_save_instrument(
-                code, self.market_var.get()
+                code, self._selected_market_key()
             ),
             self._after_resolve,
         )
@@ -670,8 +1038,10 @@ class PortfolioApp:
         self.stock_code_var.set(instrument.stock_code)
         self.yahoo_symbol_var.set(instrument.symbol)
         self.stock_name_var.set(instrument.name)
-        if self.market_var.get() == 'AUTO':
-            self.market_var.set(instrument.market_segment)
+        if self._selected_market_key() == 'AUTO':
+            self.market_var.set(
+                self._market_label(instrument.market_segment)
+            )
         message = f'已解析：{instrument.symbol} {instrument.name}'
         self.refresh_loaded_data_view()
         self._finish_operation(message)
@@ -708,7 +1078,7 @@ class PortfolioApp:
                 code,
                 symbol,
                 name,
-                self.market_var.get(),
+                self._selected_market_key(),
                 shares,
                 total_cost,
             )
@@ -740,7 +1110,12 @@ class PortfolioApp:
         self.yahoo_symbol_var.set(values[0])
         self.stock_code_var.set(values[1])
         self.stock_name_var.set(values[2])
-        self.market_var.set(values[3])
+        market_value = str(values[3])
+        self.market_var.set(
+            market_value
+            if market_value in MARKET_LABEL_TO_KEY
+            else self._market_label(market_value)
+        )
         self.shares_var.set(str(values[4]).replace(',', ''))
         self.total_cost_var.set(str(values[5]).replace(',', ''))
 
@@ -754,7 +1129,7 @@ class PortfolioApp:
         )
         for variable in variables:
             variable.set('')
-        self.market_var.set('AUTO')
+        self.market_var.set(MARKET_CHOICES['AUTO'])
 
     def refresh_all_views(self) -> None:
         self.refresh_holding_view()
@@ -767,9 +1142,26 @@ class PortfolioApp:
             holdings, self.database.get_quote_map()
         )
         summary = summarize_portfolio(views)
+
+        self.holding_tree.tag_configure(
+            'positive', foreground=self.colors['positive']
+        )
+        self.holding_tree.tag_configure(
+            'negative', foreground=self.colors['negative']
+        )
+        self.holding_tree.tag_configure(
+            'neutral', foreground=self.colors['neutral']
+        )
+
         for item in self.holding_tree.get_children():
             self.holding_tree.delete(item)
+
         for view in views:
+            row_tag = (
+                'positive' if view.profit > 0
+                else 'negative' if view.profit < 0
+                else 'neutral'
+            )
             self.holding_tree.insert(
                 '',
                 'end',
@@ -777,7 +1169,7 @@ class PortfolioApp:
                     view.symbol,
                     view.stock_code,
                     view.stock_name,
-                    view.market_segment,
+                    self._market_label(view.market_segment),
                     f'{view.shares:,}',
                     money(view.total_cost),
                     decimal(view.average_cost),
@@ -787,7 +1179,9 @@ class PortfolioApp:
                     percent(view.return_rate),
                     view.trade_date or '未更新',
                 ),
+                tags=(row_tag,),
             )
+
         self.summary_cost_var.set(
             f'NT$ {money(summary.total_cost)}'
         )
@@ -801,9 +1195,22 @@ class PortfolioApp:
             percent(summary.total_return_rate)
         )
 
+        if hasattr(self, 'summary_value_labels'):
+            result_style = (
+                'Positive.Summary.TLabel'
+                if summary.total_profit > 0
+                else 'Negative.Summary.TLabel'
+                if summary.total_profit < 0
+                else 'Summary.TLabel'
+            )
+            self.summary_value_labels[2].configure(style=result_style)
+            self.summary_value_labels[3].configure(style=result_style)
+
     def refresh_dividend_view(self) -> None:
         try:
             target_year = int(self.dividend_year_var.get())
+            if target_year < 1900 or target_year > 2200:
+                raise ValueError
         except ValueError:
             messagebox.showerror(
                 '年度錯誤', '請輸入四位數西元年。'
@@ -816,19 +1223,52 @@ class PortfolioApp:
             target_year,
         )
         monthly = summarize_monthly(projections, target_year)
+        year_summary = summarize_year(projections)
+
+        self._dividend_projections = projections
+        self._dividend_month_groups = group_month_components(projections)
+
+        self.dividend_realized_var.set(
+            f'NT$ {money(year_summary.realized_amount)}'
+        )
+        self.dividend_pending_var.set(
+            f'NT$ {money(year_summary.pending_amount)}'
+        )
+        self.dividend_total_var.set(
+            f'NT$ {money(year_summary.total_amount)}'
+        )
+
         for tree in (self.monthly_tree, self.dividend_tree):
             for item in tree.get_children():
                 tree.delete(item)
-        for month, amount in monthly:
-            self.monthly_tree.insert(
-                '', 'end', values=(month, f'NT$ {money(amount)}')
+
+        for item in monthly:
+            tag = (
+                'has_realized'
+                if item.realized_amount > 0
+                else 'pending_only'
+                if item.pending_amount > 0
+                else ''
             )
+            self.monthly_tree.insert(
+                '',
+                'end',
+                values=(
+                    item.month,
+                    f'NT$ {money(item.realized_amount)}',
+                    f'NT$ {money(item.pending_amount)}',
+                    f'NT$ {money(item.total_amount)}',
+                ),
+                tags=(tag,) if tag else (),
+            )
+
         for item in projections:
             self.dividend_tree.insert(
                 '',
                 'end',
                 values=(
                     item.month,
+                    item.status_text,
                     item.symbol,
                     item.stock_name,
                     f'{item.shares:,}',
@@ -837,7 +1277,329 @@ class PortfolioApp:
                     item.basis,
                     item.reference_date,
                 ),
+                tags=(item.status,),
             )
+
+        month_values = [item.month for item in monthly]
+        self.dividend_month_combo.configure(values=month_values)
+        selected_month = self.dividend_month_var.get()
+        if selected_month not in month_values:
+            selected_month = (
+                f'{target_year}-{date.today().month:02d}'
+                if target_year == date.today().year
+                else next(
+                    (
+                        item.month for item in monthly
+                        if item.total_amount > 0
+                    ),
+                    f'{target_year}-01',
+                )
+            )
+            self.dividend_month_var.set(selected_month)
+
+        self._render_dividend_month_components()
+        self._render_dividend_chart(monthly, projections, target_year)
+
+    def _render_dividend_month_components(self) -> None:
+        """更新使用者目前選定月份的個股／ETF 組成表。"""
+        if not hasattr(self, 'dividend_component_tree'):
+            return
+
+        for row in self.dividend_component_tree.get_children():
+            self.dividend_component_tree.delete(row)
+
+        month = self.dividend_month_var.get()
+        for item in self._dividend_month_groups.get(month, []):
+            self.dividend_component_tree.insert(
+                '',
+                'end',
+                values=(
+                    item.status_text,
+                    item.stock_code,
+                    item.stock_name,
+                    f'{item.shares:,}',
+                    decimal(item.dividend_per_share, 4),
+                    f'NT$ {money(item.estimated_amount)}',
+                    item.basis,
+                ),
+                tags=(item.status,),
+            )
+
+    def _render_dividend_chart(
+        self,
+        monthly,
+        projections,
+        target_year: int,
+    ) -> None:
+        """
+        畫出 12 個月堆疊長條圖。
+
+        - 每一種顏色代表一檔持股。
+        - 實心代表已實現。
+        - 半透明斜線代表未領或歷史模式估算。
+        """
+        ax = self.dividend_ax
+        ax.clear()
+        ax.set_facecolor(self.colors['surface'])
+        self._dividend_month_patches = {index: [] for index in range(12)}
+
+        month_keys = [item.month for item in monthly]
+        x_values = list(range(12))
+
+        symbol_totals: dict[str, float] = {}
+        symbol_names: dict[str, str] = {}
+        for item in projections:
+            symbol_totals[item.symbol] = (
+                symbol_totals.get(item.symbol, 0.0)
+                + item.estimated_amount
+            )
+            symbol_names[item.symbol] = (
+                f'{item.stock_code} {item.stock_name}'
+            )
+        symbols = sorted(
+            symbol_totals,
+            key=symbol_totals.get,
+            reverse=True,
+        )
+
+        cmap = colormaps['tab20'].resampled(max(len(symbols), 1))
+        symbol_colors = {
+            symbol: cmap(index)
+            for index, symbol in enumerate(symbols)
+        }
+        bottoms = [0.0] * 12
+
+        for symbol in symbols:
+            color = symbol_colors[symbol]
+            for status in (REALIZED, PENDING):
+                values = []
+                for month in month_keys:
+                    values.append(sum(
+                        item.estimated_amount
+                        for item in projections
+                        if item.symbol == symbol
+                        and item.month == month
+                        and item.status == status
+                    ))
+
+                bars = ax.bar(
+                    x_values,
+                    values,
+                    bottom=bottoms,
+                    width=0.68,
+                    color=color,
+                    edgecolor='#475569',
+                    linewidth=0.45,
+                    alpha=1.0 if status == REALIZED else 0.58,
+                    hatch=None if status == REALIZED else '///',
+                )
+                for month_index, (bar, value) in enumerate(zip(bars, values)):
+                    if value > 0:
+                        self._dividend_month_patches[month_index].append(bar)
+                bottoms = [
+                    bottom + value
+                    for bottom, value in zip(bottoms, values)
+                ]
+
+        max_total = max(bottoms, default=0.0)
+        for index, total in enumerate(bottoms):
+            if total <= 0:
+                continue
+            ax.text(
+                index,
+                total + max(max_total * 0.018, 30),
+                f'{total:,.0f}',
+                ha='center',
+                va='bottom',
+                fontsize=8.5,
+                color=self.colors['text'],
+                fontweight='bold',
+            )
+
+        ax.set_title(
+            f'{target_year} 年每月股利組成',
+            loc='left',
+            fontsize=13,
+            fontweight='bold',
+            color=self.colors['primary_dark'],
+            pad=10,
+        )
+        ax.set_xticks(x_values)
+        ax.set_xticklabels([f'{month}月' for month in range(1, 13)])
+        ax.set_ylabel('股利金額（NT$）')
+        ax.yaxis.set_major_formatter(
+            FuncFormatter(lambda value, _pos: f'{value:,.0f}')
+        )
+        ax.grid(axis='y', linestyle='--', alpha=0.22)
+        ax.set_axisbelow(True)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_color(self.colors['border'])
+        ax.spines['bottom'].set_color(self.colors['border'])
+        ax.tick_params(colors=self.colors['text'])
+        ax.margins(x=0.02)
+        if max_total > 0:
+            ax.set_ylim(0, max_total * 1.20)
+
+        legend_symbols = symbols[:12]
+        legend_handles = [
+            Patch(
+                facecolor=symbol_colors[symbol],
+                edgecolor='#475569',
+                label=symbol_names[symbol],
+            )
+            for symbol in legend_symbols
+        ]
+        if len(symbols) > len(legend_symbols):
+            legend_handles.append(
+                Patch(
+                    facecolor='#CBD5E1',
+                    edgecolor='#64748B',
+                    label=(
+                        f'另有 {len(symbols) - len(legend_symbols)} 檔'
+                        '（詳見月份組成）'
+                    ),
+                )
+            )
+        if symbols:
+            legend_handles.extend([
+                Patch(
+                    facecolor='#FFFFFF',
+                    edgecolor='#475569',
+                    label='實心＝已實現',
+                ),
+                Patch(
+                    facecolor='#FFFFFF',
+                    edgecolor='#475569',
+                    hatch='///',
+                    alpha=0.65,
+                    label='斜線＝未領／估算',
+                ),
+            ])
+            ax.legend(
+                handles=legend_handles,
+                loc='upper left',
+                bbox_to_anchor=(1.005, 1.02),
+                fontsize=8,
+                frameon=False,
+                ncol=1,
+            )
+            self.dividend_figure.subplots_adjust(
+                left=0.07, right=0.79, top=0.88, bottom=0.16
+            )
+        else:
+            ax.text(
+                0.5,
+                0.5,
+                '尚無股利資料，請先更新持股股利／分割。',
+                transform=ax.transAxes,
+                ha='center',
+                va='center',
+                color=self.colors['muted'],
+                fontsize=12,
+            )
+            self.dividend_figure.subplots_adjust(
+                left=0.07, right=0.97, top=0.86, bottom=0.16
+            )
+
+        self._dividend_chart_annotation = ax.annotate(
+            '',
+            xy=(0, 0),
+            xytext=(14, 14),
+            textcoords='offset points',
+            bbox={
+                'boxstyle': 'round,pad=0.5',
+                'fc': '#FFFFFF',
+                'ec': self.colors['border'],
+                'alpha': 0.97,
+            },
+            arrowprops={'arrowstyle': '->', 'color': self.colors['muted']},
+            fontsize=9,
+        )
+        self._dividend_chart_annotation.set_visible(False)
+        self.dividend_canvas.draw_idle()
+
+    def _dividend_tooltip_text(self, month_index: int) -> str:
+        """組合某個月份的圖表提示文字。"""
+        try:
+            target_year = int(self.dividend_year_var.get())
+        except ValueError:
+            return ''
+        month_key = f'{target_year}-{month_index + 1:02d}'
+        items = self._dividend_month_groups.get(month_key, [])
+        realized = sum(
+            item.estimated_amount for item in items
+            if item.status == REALIZED
+        )
+        pending = sum(
+            item.estimated_amount for item in items
+            if item.status == PENDING
+        )
+        lines = [
+            f'{month_index + 1} 月',
+            f'已實現：NT$ {realized:,.0f}',
+            f'未領／預估：NT$ {pending:,.0f}',
+            f'合計：NT$ {realized + pending:,.0f}',
+        ]
+        if items:
+            lines.append('組成：')
+            for item in items[:8]:
+                marker = '已' if item.status == REALIZED else '未'
+                lines.append(
+                    f'  [{marker}] {item.stock_code} {item.stock_name} '
+                    f'{item.estimated_amount:,.0f}'
+                )
+            if len(items) > 8:
+                lines.append(f'  …另有 {len(items) - 8} 筆')
+        else:
+            lines.append('本月無股利資料')
+        return '\n'.join(lines)
+
+    def _on_dividend_chart_hover(self, event) -> None:
+        if (
+            event.inaxes != self.dividend_ax
+            or event.xdata is None
+            or self._dividend_chart_annotation is None
+        ):
+            if self._dividend_chart_annotation is not None:
+                self._dividend_chart_annotation.set_visible(False)
+                self.dividend_canvas.draw_idle()
+            return
+
+        month_index = int(round(event.xdata))
+        if month_index < 0 or month_index > 11 or abs(event.xdata - month_index) > 0.46:
+            self._dividend_chart_annotation.set_visible(False)
+            self.dividend_canvas.draw_idle()
+            return
+
+        total = sum(
+            patch.get_height()
+            for patch in self._dividend_month_patches.get(month_index, [])
+        )
+        self._dividend_chart_annotation.xy = (month_index, total)
+        self._dividend_chart_annotation.set_text(
+            self._dividend_tooltip_text(month_index)
+        )
+        self._dividend_chart_annotation.set_visible(True)
+        self.dividend_canvas.draw_idle()
+
+    def _on_dividend_chart_click(self, event) -> None:
+        """點擊月份長條後，同步切換「選定月份組成」表。"""
+        if event.inaxes != self.dividend_ax or event.xdata is None:
+            return
+        month_index = int(round(event.xdata))
+        if month_index < 0 or month_index > 11:
+            return
+        try:
+            target_year = int(self.dividend_year_var.get())
+        except ValueError:
+            return
+        self.dividend_month_var.set(
+            f'{target_year}-{month_index + 1:02d}'
+        )
+        self._render_dividend_month_components()
+        if hasattr(self, 'dividend_table_tabs'):
+            self.dividend_table_tabs.select(1)
 
     @staticmethod
     def _matches_search(query: str, *values) -> bool:
@@ -873,6 +1635,7 @@ class PortfolioApp:
                 item.product_category,
                 item.product_category,
             )
+            market_text = self._market_label(item.market_segment)
             if not self._matches_search(
                 query,
                 item.symbol,
@@ -880,6 +1643,7 @@ class PortfolioApp:
                 item.name,
                 item.exchange,
                 item.market_segment,
+                market_text,
                 category_text,
                 item.quote_type,
                 item.currency,
@@ -894,7 +1658,7 @@ class PortfolioApp:
                     item.stock_code,
                     item.name,
                     item.exchange,
-                    item.market_segment,
+                    market_text,
                     category_text,
                     item.quote_type,
                     item.currency,
@@ -913,6 +1677,12 @@ class PortfolioApp:
             ):
                 continue
             quote_count += 1
+            change_value = float(row.get('change_value') or 0.0)
+            quote_tag = (
+                'positive' if change_value > 0
+                else 'negative' if change_value < 0
+                else 'neutral'
+            )
             self.quote_tree.insert(
                 '',
                 'end',
@@ -927,6 +1697,7 @@ class PortfolioApp:
                     f"{row['volume']:,.0f}",
                     row['trade_date'],
                 ),
+                tags=(quote_tag,),
             )
 
         action_count = 0
@@ -960,6 +1731,7 @@ class PortfolioApp:
                     decimal(action.value, 4),
                     action.source,
                 ),
+                tags=(action.action_type,),
             )
 
         self.loaded_count_var.set(

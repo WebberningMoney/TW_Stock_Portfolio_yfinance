@@ -2,3 +2,5 @@ yfinance[repair]>=0.2.65,<2
 pandas>=2.0
 scipy>=1.11
 requests>=2.32
+
+matplotlib>=3.8

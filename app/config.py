@@ -7,8 +7,8 @@
 
 from pathlib import Path
 
-APP_TITLE = '台股庫存、損益與配息管理（yfinance v1.2）'
-WINDOW_SIZE = '1480x880'
+APP_TITLE = '台股庫存、損益與配息管理（yfinance v1.3）'
+WINDOW_SIZE = '1540x930'
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / 'data'
@@ -30,6 +30,8 @@ MARKET_CHOICES = {
     'TPEX': '上櫃／上櫃 ETF（.TWO）',
     'EMERGING': '興櫃（通常為 .TWO，Yahoo 覆蓋不保證）',
 }
+
+MARKET_LABEL_TO_KEY = {label: key for key, label in MARKET_CHOICES.items()}
 
 # 建立商品清冊時可選擇的範圍。預設不下載權證及其他衍生商品。
 UNIVERSE_CATEGORY_CHOICES = {
