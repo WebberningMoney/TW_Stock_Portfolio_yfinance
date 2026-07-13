@@ -105,3 +105,55 @@ class ServiceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DividendAnnouncementSuppressionTests(unittest.TestCase):
+    def test_announced_annual_dividend_suppresses_adjacent_history_projection(self):
+        """去年 8 月、今年公告 7 月，應視為同一次年度股利。"""
+        holding = Holding(
+            None,
+            '6284',
+            '6284.TWO',
+            '佳邦',
+            'TPEX',
+            1000,
+            70000.0,
+        )
+        actions = [
+            CorporateAction(
+                symbol='6284.TWO',
+                stock_code='6284',
+                stock_name='佳邦',
+                action_date='2025-07-10',
+                action_type='DIVIDEND',
+                value=2.0,
+                source='yahoo_tw_scraper',
+                period='2024',
+                payment_date='2025-08-08',
+                announcement_status='PAID',
+            ),
+            CorporateAction(
+                symbol='6284.TWO',
+                stock_code='6284',
+                stock_name='佳邦',
+                action_date='2026-06-25',
+                action_type='DIVIDEND',
+                value=2.5,
+                source='yahoo_tw_scraper',
+                period='2025',
+                payment_date='2026-07-24',
+                announcement_status='ANNOUNCED',
+            ),
+        ]
+
+        result = build_dividend_projection(
+            [holding],
+            actions,
+            target_year=2026,
+            as_of_date=date(2026, 7, 14),
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].month, '2026-07')
+        self.assertEqual(result[0].source, 'yahoo_tw_scraper')
+        self.assertFalse(any(item.month == '2026-08' for item in result))

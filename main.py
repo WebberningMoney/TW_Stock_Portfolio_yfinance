@@ -19,7 +19,7 @@ def center_window(root: tk.Tk, size: str) -> None:
 
     # 避免筆電螢幕較小時視窗超出可見區域，同時維持置中。
     width = min(requested_width, max(screen_width - 70, 1180))
-    height = min(requested_height, max(screen_height - 110, 720))
+    height = min(requested_height, max(screen_height - 55, 760))
     x = max((screen_width - width) // 2, 0)
     y = max((screen_height - height) // 2, 0)
     root.geometry(f'{width}x{height}+{x}+{y}')
@@ -33,7 +33,7 @@ def main() -> None:
     root = tk.Tk()
     root.withdraw()
     root.title(APP_TITLE)
-    root.minsize(1180, 720)
+    root.minsize(1180, 760)
     center_window(root, WINDOW_SIZE)
 
     PortfolioApp(root=root, database=database)

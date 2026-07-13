@@ -565,11 +565,11 @@ class PortfolioApp:
             padding=5,
         )
         tables_frame = ttk.Frame(pane)
-        pane.add(chart_frame, weight=5)
+        pane.add(chart_frame, weight=6)
         pane.add(tables_frame, weight=2)
 
         self.dividend_figure = Figure(
-            figsize=(13.6, 5.0),
+            figsize=(14.0, 5.8),
             dpi=100,
             facecolor=self.colors['surface'],
         )
@@ -579,7 +579,7 @@ class PortfolioApp:
             master=chart_frame,
         )
         chart_widget = self.dividend_canvas.get_tk_widget()
-        chart_widget.configure(height=470)
+        chart_widget.configure(height=540)
         chart_widget.pack(fill='both', expand=True)
 
         # 第一次顯示時給圖表較大的垂直空間，仍可由使用者拖曳分隔線調整。
@@ -1013,8 +1013,8 @@ class PortfolioApp:
             '正在更新持股股利／分割與已公告股利……',
             lambda: self.sync_service.sync_holding_actions(self._progress),
             lambda result: self._after_sync(
-                f'歷史股利／分割 {result[0]} 筆；'
-                f'Yahoo 台灣股利政策 {result[1]} 筆；'
+                f'API／yfinance 歷史股利／分割 {result[0]} 筆；'
+                f'爬蟲／Yahoo 台灣已公告股利 {result[1]} 筆；'
                 f'最終失敗項目 {result[2]} 個'
             ),
         )
@@ -1164,8 +1164,9 @@ class PortfolioApp:
         if height < 350:
             return
         try:
-            # 圖表約使用 68% 高度，並至少為下方表格保留 190px。
-            position = min(max(int(height * 0.68), 420), height - 190)
+            # 圖表約使用 74% 高度，並至少為下方表格保留 170px。
+            # 較大的上半部可避免圖表標題及右側圖例被裁切。
+            position = min(max(int(height * 0.74), 500), height - 170)
             pane.sashpos(0, position)
         except tk.TclError:
             pass
@@ -1474,7 +1475,7 @@ class PortfolioApp:
             fontsize=13,
             fontweight='bold',
             color=self.colors['primary_dark'],
-            pad=10,
+            pad=7,
         )
         ax.set_xticks(x_values)
         ax.set_xticklabels([f'{month}月' for month in range(1, 13)])
@@ -1543,7 +1544,7 @@ class PortfolioApp:
             self.dividend_figure.subplots_adjust(
                 left=0.065,
                 right=0.70 if legend_columns == 2 else 0.79,
-                top=0.90,
+                top=0.83,
                 bottom=0.14,
             )
         else:
@@ -1558,7 +1559,7 @@ class PortfolioApp:
                 fontsize=12,
             )
             self.dividend_figure.subplots_adjust(
-                left=0.065, right=0.97, top=0.90, bottom=0.14
+                left=0.065, right=0.97, top=0.83, bottom=0.14
             )
 
         self._dividend_chart_annotation = ax.annotate(
@@ -1761,8 +1762,8 @@ class PortfolioApp:
 
         action_count = 0
         source_labels = {
-            'yfinance': 'yfinance 歷史資料',
-            'yahoo_tw_scraper': 'Yahoo 台灣股利政策',
+            'yfinance': 'API／yfinance 歷史',
+            'yahoo_tw_scraper': '爬蟲／Yahoo 台灣已公告',
             'projection': '歷史模式估算',
         }
         status_labels = {

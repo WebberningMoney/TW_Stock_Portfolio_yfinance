@@ -147,12 +147,19 @@ class SyncService:
         last_error: Exception | None = None
         for attempt in range(1, HTTP_ITEM_RETRIES + 1):
             try:
+                if progress:
+                    progress(
+                        f'[API／歷史] {instrument.symbol}：'
+                        f'第 {attempt}/{HTTP_ITEM_RETRIES} 次嘗試',
+                        attempt,
+                        HTTP_ITEM_RETRIES,
+                    )
                 return self.client.fetch_actions(instrument)
             except Exception as exc:
                 last_error = exc
                 if progress:
                     progress(
-                        f'歷史股利／分割 {instrument.symbol} 第 {attempt}/'
+                        f'[API／歷史] {instrument.symbol} 第 {attempt}/'
                         f'{HTTP_ITEM_RETRIES} 次失敗：{exc}',
                         attempt,
                         HTTP_ITEM_RETRIES,
@@ -185,7 +192,7 @@ class SyncService:
         for index, holding in enumerate(holdings, start=1):
             if progress:
                 progress(
-                    f'股利／分割資料 {index}/{total}：'
+                    f'處理持股 {index}/{total}：'
                     f'{holding.yahoo_symbol} {holding.stock_name}',
                     index,
                     total,
@@ -227,18 +234,18 @@ class SyncService:
                 history_action_count += len(actions)
                 if progress:
                     progress(
-                        f'歷史股利／分割完成：{instrument.symbol} '
-                        f'{len(actions)} 筆',
+                        f'[API／歷史] 完成：{instrument.symbol} '
+                        f'{len(actions)} 筆股利／分割',
                         index,
                         total,
                     )
             except Exception as exc:
                 failed_items.append(
-                    f'{instrument.symbol} 歷史股利／分割：{exc}'
+                    f'{instrument.symbol} API／歷史股利／分割：{exc}'
                 )
                 if progress:
                     progress(
-                        f'最終失敗：{instrument.symbol} 歷史股利／分割；{exc}',
+                        f'[API／歷史] 最終失敗：{instrument.symbol}；{exc}',
                         index,
                         total,
                     )
@@ -262,18 +269,31 @@ class SyncService:
                         for item in announced
                     )
                     progress(
-                        f'已公告股利頁完成：{instrument.symbol} '
+                        f'[爬蟲／Yahoo 台灣已公告] 完成：{instrument.symbol} '
                         f'{len(announced)} 筆，其中尚未發放 {future_count} 筆',
                         index,
                         total,
                     )
             except Exception as exc:
                 failed_items.append(
-                    f'{instrument.symbol} 已公告股利頁：{exc}'
+                    f'{instrument.symbol} 爬蟲／Yahoo 台灣已公告：{exc}'
                 )
                 if progress:
                     progress(
-                        f'最終失敗：{instrument.symbol} 已公告股利頁；{exc}',
+                        f'[爬蟲／Yahoo 台灣已公告] 最終失敗：'
+                        f'{instrument.symbol}；{exc}',
+                        index,
+                        total,
+                    )
+
+            # 兩個來源完成後，合併日期、商品與數值完全相同的事件。
+            merge_messages = self.database.consolidate_duplicate_actions_for_symbol(
+                instrument.symbol
+            )
+            for message in merge_messages:
+                if progress:
+                    progress(
+                        f'[資料整合] {message}',
                         index,
                         total,
                     )

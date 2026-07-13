@@ -94,6 +94,58 @@ def _safe_date(year: int, month: int, day: int) -> date:
     return date(year, month, min(day, monthrange(year, month)[1]))
 
 
+def _matched_template_indexes(
+    actual_events: list[CorporateAction],
+    template_events: list[CorporateAction],
+    target_year: int,
+) -> set[int]:
+    """
+    將當年度已發生／已公告事件，與上一年度的發放模式做一對一配對。
+
+    配對使用「現金發放日優先、否則除息日」的月日距離。這可以處理公司
+    每年發放月份前後移動的情況，例如去年 8 月、今年已公告 7 月；兩者會
+    被視為同一次年度股利，而不會再額外產生 8 月預估。
+
+    季配或月配商品仍可保留尚未被當年度事件覆蓋的其他期次。
+    """
+    if not actual_events or not template_events:
+        return set()
+
+    projected_template_dates: list[date | None] = []
+    for action in template_events:
+        template_date = _cashflow_date(action)
+        projected_template_dates.append(
+            _safe_date(
+                target_year,
+                template_date.month,
+                template_date.day,
+            )
+            if template_date
+            else None
+        )
+
+    used: set[int] = set()
+    for actual in sorted(
+        actual_events,
+        key=lambda item: _cashflow_date(item) or date.min,
+    ):
+        actual_date = _cashflow_date(actual)
+        if not actual_date:
+            continue
+
+        candidates = [
+            (abs((projected_date - actual_date).days), index)
+            for index, projected_date in enumerate(projected_template_dates)
+            if index not in used and projected_date is not None
+        ]
+        if not candidates:
+            break
+        _distance, closest_index = min(candidates)
+        used.add(closest_index)
+
+    return used
+
+
 def _cashflow_date(action: CorporateAction) -> date | None:
     """優先使用現金發放日，沒有時退回除息日。"""
     return _parse_date(action.payment_date) or _parse_date(action.action_date)
@@ -239,13 +291,26 @@ def build_dividend_projection(
         if not prior_years:
             continue
         template_year = prior_years[0]
-
-        for action in sorted(
+        template_events = sorted(
             years[template_year],
             key=lambda item: _cashflow_date(item) or date.min,
-        ):
+        )
+
+        # 當年度已有公告／實際事件時，先和歷史模板做一對一配對。
+        # 例如 6284 去年 8 月發放、今年已公告 7 月發放，會配成同一年度
+        # 事件，避免 7 月公告股利之外又多產生 8 月歷史估算。
+        covered_template_indexes = _matched_template_indexes(
+            actual_events,
+            template_events,
+            target_year,
+        )
+
+        for template_index, action in enumerate(template_events):
+            if template_index in covered_template_indexes:
+                continue
+
             template_date = _cashflow_date(action)
-            if not template_date or template_date.month in actual_months:
+            if not template_date:
                 continue
 
             projected_date = _safe_date(
@@ -266,7 +331,10 @@ def build_dividend_projection(
                     dividend_per_share=action.value,
                     estimated_amount=holding.shares * action.value,
                     status=PENDING,
-                    basis=f'{template_year} 年歷史發放模式估算',
+                    basis=(
+                        f'{template_year} 年歷史發放模式估算'
+                        '（當年度尚無對應公告）'
+                    ),
                     reference_date=projected_date.isoformat(),
                     payment_date=projected_date.isoformat(),
                     period='歷史模式估算',

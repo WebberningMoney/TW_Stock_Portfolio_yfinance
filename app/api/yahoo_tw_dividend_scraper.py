@@ -290,7 +290,7 @@ class YahooTwDividendScraper:
             try:
                 if progress:
                     progress(
-                        f'已公告股利頁 {instrument.symbol}：'
+                        f'[爬蟲／Yahoo 台灣已公告] {instrument.symbol}：'
                         f'第 {attempt}/{HTTP_ITEM_RETRIES} 次嘗試',
                         attempt,
                         HTTP_ITEM_RETRIES,
@@ -311,7 +311,7 @@ class YahooTwDividendScraper:
                 last_error = exc
                 if progress:
                     progress(
-                        f'已公告股利頁 {instrument.symbol} 第 {attempt} 次失敗：'
+                        f'[爬蟲／Yahoo 台灣已公告] {instrument.symbol} 第 {attempt} 次失敗：'
                         f'{exc}',
                         attempt,
                         HTTP_ITEM_RETRIES,

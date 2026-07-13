@@ -446,6 +446,125 @@ class Database:
             )
             self._insert_actions(connection, actions)
 
+    def consolidate_duplicate_actions_for_symbol(
+        self,
+        symbol: str,
+    ) -> list[str]:
+        """
+        整合同一商品中完全相同的股利／分割事件。
+
+        重複判斷欄位：除息／事件日、Yahoo Symbol、股票代號、股票名稱、
+        數值，以及事件類型（安全性補充，避免股利與分割誤合併）。
+
+        若 yfinance 與 Yahoo 台灣爬蟲同時有同一筆資料，保留欄位較完整
+        的紀錄；完整度相同時，優先保留 Yahoo 台灣股利政策頁。
+        回傳每一組合併紀錄的中文 LOG 訊息。
+        """
+        source_priority = {
+            'yahoo_tw_scraper': 20,
+            'yfinance': 10,
+        }
+        source_labels = {
+            'yahoo_tw_scraper': '爬蟲／Yahoo 台灣已公告',
+            'yfinance': 'API／yfinance 歷史',
+        }
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT id, symbol, stock_code, stock_name, action_date,
+                          action_type, value, source, period, payment_date,
+                          announcement_status
+                   FROM corporate_actions
+                   WHERE symbol = ?
+                   ORDER BY action_date, action_type, value, id""",
+                (symbol,),
+            ).fetchall()
+
+            grouped: dict[tuple, list[sqlite3.Row]] = {}
+            for row in rows:
+                key = (
+                    row['action_date'],
+                    row['symbol'],
+                    row['stock_code'],
+                    row['stock_name'],
+                    round(float(row['value']), 8),
+                    row['action_type'],
+                )
+                grouped.setdefault(key, []).append(row)
+
+            messages: list[str] = []
+            for _key, duplicates in grouped.items():
+                if len(duplicates) <= 1:
+                    continue
+
+                def score(row: sqlite3.Row) -> tuple[int, int, int]:
+                    detail_count = sum(bool(row[field]) for field in (
+                        'period',
+                        'payment_date',
+                        'announcement_status',
+                    ))
+                    return (
+                        detail_count,
+                        source_priority.get(row['source'], 0),
+                        int(row['id']),
+                    )
+
+                primary = max(duplicates, key=score)
+                merged = dict(primary)
+                ordered = sorted(duplicates, key=score, reverse=True)
+
+                # 主要紀錄缺欄位時，從其他相同資料補齊。
+                for field in (
+                    'period',
+                    'payment_date',
+                    'announcement_status',
+                ):
+                    if not merged.get(field):
+                        merged[field] = next(
+                            (row[field] for row in ordered if row[field]),
+                            '',
+                        )
+
+                ids = [int(row['id']) for row in duplicates]
+                placeholders = ','.join('?' for _ in ids)
+                connection.execute(
+                    f'DELETE FROM corporate_actions WHERE id IN ({placeholders})',
+                    ids,
+                )
+                self._insert_actions(
+                    connection,
+                    [CorporateAction(
+                        symbol=merged['symbol'],
+                        stock_code=merged['stock_code'],
+                        stock_name=merged['stock_name'],
+                        action_date=merged['action_date'],
+                        action_type=merged['action_type'],
+                        value=float(merged['value']),
+                        source=merged['source'],
+                        period=merged.get('period') or '',
+                        payment_date=merged.get('payment_date') or '',
+                        announcement_status=(
+                            merged.get('announcement_status') or ''
+                        ),
+                    )],
+                )
+
+                source_list = '＋'.join(sorted({
+                    source_labels.get(row['source'], row['source'])
+                    for row in duplicates
+                }))
+                kept_source = source_labels.get(
+                    merged['source'], merged['source']
+                )
+                messages.append(
+                    f'整合重複資料：{merged["symbol"]} '
+                    f'{merged["action_date"]} '
+                    f'{merged["action_type"]} {float(merged["value"]):g}；'
+                    f'{source_list} 共 {len(duplicates)} 筆 → 保留 {kept_source}'
+                )
+
+        return messages
+
     def list_actions(
         self,
         action_type: str | None = None,
