@@ -33,7 +33,7 @@ def main() -> None:
     root = tk.Tk()
     root.withdraw()
     root.title(APP_TITLE)
-    root.minsize(1180, 760)
+    root.minsize(1160, 740)
     center_window(root, WINDOW_SIZE)
 
     PortfolioApp(root=root, database=database)
