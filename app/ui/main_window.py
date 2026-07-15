@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import math
+import re
 import threading
 import tkinter as tk
+import webbrowser
 from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -71,6 +74,7 @@ class PortfolioApp:
         self.loaded_search_var = tk.StringVar()
         self.loaded_count_var = tk.StringVar(value='')
         self.log_status_var = tk.StringVar(value='尚未執行下載作業')
+        self.ai_selected_var = tk.StringVar(value='請先在庫存表選取一檔持股')
 
         self._loaded_instruments = []
         self._loaded_quotes: list[dict] = []
@@ -79,6 +83,7 @@ class PortfolioApp:
         self._dividend_month_groups = {}
         self._dividend_chart_annotation = None
         self._dividend_month_patches: dict[int, list] = {}
+        self._holding_view_by_symbol: dict[str, object] = {}
 
         self._build_style()
         self._build_layout()
@@ -274,47 +279,63 @@ class PortfolioApp:
         ttk.Label(outer, textvariable=self.status_var).pack(anchor='w')
 
     def _build_input_panel(self, parent: ttk.Frame) -> None:
+        """建立偏向鍵盤操作的持股輸入區。"""
         frame = ttk.LabelFrame(parent, text='持股資料', padding=10)
         frame.pack(fill='x', pady=(0, 8))
 
-        fields = [
-            ('股票代號', self.stock_code_var, 10, 'normal'),
-            ('Yahoo Symbol', self.yahoo_symbol_var, 13, 'readonly'),
-            ('股票名稱', self.stock_name_var, 20, 'normal'),
-            ('持有股數', self.shares_var, 12, 'normal'),
-            ('持有總成本', self.total_cost_var, 15, 'normal'),
-        ]
-        for index, (label, variable, width, state) in enumerate(fields):
-            ttk.Label(frame, text=label).grid(
-                row=0,
-                column=index * 2,
-                padx=(3, 2),
-                sticky='e',
-            )
-            entry = ttk.Entry(
-                frame,
-                textvariable=variable,
-                width=width,
-                state=state,
-            )
-            entry.grid(
-                row=0,
-                column=index * 2 + 1,
-                padx=(0, 7),
-            )
-            if label == '股票代號':
-                self.stock_code_entry = entry
+        # Yahoo Symbol 保留為內部識別值，不在輸入畫面顯示，降低視覺負擔。
+        ttk.Label(frame, text='股票代號').grid(
+            row=0, column=0, padx=(3, 2), sticky='e'
+        )
+        self.stock_code_entry = ttk.Entry(
+            frame,
+            textvariable=self.stock_code_var,
+            width=12,
+        )
+        self.stock_code_entry.grid(row=0, column=1, padx=(0, 10))
+
+        ttk.Label(frame, text='股票名稱').grid(
+            row=0, column=2, padx=(3, 2), sticky='e'
+        )
+        self.stock_name_entry = ttk.Entry(
+            frame,
+            textvariable=self.stock_name_var,
+            width=24,
+            state='readonly',
+        )
+        self.stock_name_entry.grid(row=0, column=3, padx=(0, 10))
+
+        ttk.Label(frame, text='持有股數').grid(
+            row=0, column=4, padx=(3, 2), sticky='e'
+        )
+        self.shares_entry = ttk.Entry(
+            frame,
+            textvariable=self.shares_var,
+            width=14,
+        )
+        self.shares_entry.grid(row=0, column=5, padx=(0, 10))
+
+        ttk.Label(frame, text='持有總成本').grid(
+            row=0, column=6, padx=(3, 2), sticky='e'
+        )
+        self.total_cost_entry = ttk.Entry(
+            frame,
+            textvariable=self.total_cost_var,
+            width=17,
+        )
+        self.total_cost_entry.grid(row=0, column=7, padx=(0, 10))
 
         ttk.Label(frame, text='市場').grid(
             row=1, column=0, pady=(8, 0), sticky='e'
         )
-        ttk.Combobox(
+        self.market_combo = ttk.Combobox(
             frame,
             textvariable=self.market_var,
             values=list(MARKET_CHOICES.values()),
             width=37,
             state='readonly',
-        ).grid(
+        )
+        self.market_combo.grid(
             row=1,
             column=1,
             columnspan=3,
@@ -326,22 +347,45 @@ class PortfolioApp:
             frame,
             text='解析代號',
             command=self.resolve_symbol,
-        ).grid(row=1, column=6, pady=(8, 0), padx=4)
+        ).grid(row=1, column=4, pady=(8, 0), padx=4)
         ttk.Button(
             frame,
-            text='儲存持股',
-            command=self.save_holding,
-        ).grid(row=1, column=7, pady=(8, 0), padx=4)
+            text='確認並儲存',
+            command=self.confirm_save_holding,
+            style='Accent.TButton',
+        ).grid(row=1, column=5, pady=(8, 0), padx=4)
         ttk.Button(
             frame,
             text='刪除選取',
             command=self.delete_selected_holding,
-        ).grid(row=1, column=8, pady=(8, 0), padx=4)
+        ).grid(row=1, column=6, pady=(8, 0), padx=4)
         ttk.Button(
             frame,
             text='清空欄位',
-            command=self.clear_form,
-        ).grid(row=1, column=9, pady=(8, 0), padx=4)
+            command=self.clear_form_and_focus,
+        ).grid(row=1, column=7, pady=(8, 0), padx=4)
+
+        ttk.Label(
+            frame,
+            text=(
+                '鍵盤流程：股票代號 Enter／Tab → 股數 Enter／Tab '
+                '→ 總成本 Enter → Enter 確認儲存'
+            ),
+            foreground=self.colors['muted'],
+        ).grid(
+            row=2,
+            column=0,
+            columnspan=8,
+            pady=(8, 0),
+            sticky='w',
+        )
+
+        # Tab 經過自訂處理時回傳 break，避免焦點在資料尚未解析前跳走。
+        self.stock_code_entry.bind('<Return>', self._on_stock_code_commit)
+        self.stock_code_entry.bind('<Tab>', self._on_stock_code_commit)
+        self.shares_entry.bind('<Return>', self._on_shares_commit)
+        self.shares_entry.bind('<Tab>', self._on_shares_commit)
+        self.total_cost_entry.bind('<Return>', self._on_total_cost_commit)
 
     def _build_sync_panel(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(
@@ -409,6 +453,7 @@ class PortfolioApp:
         self.main_notebook.pack(fill='both', expand=True)
 
         holding_tab = ttk.Frame(self.main_notebook, padding=7)
+        self.holding_tab = holding_tab
         dividend_tab = ttk.Frame(self.main_notebook, padding=7)
         self.dividend_tab = dividend_tab
         data_tab = ttk.Frame(self.main_notebook, padding=7)
@@ -419,13 +464,26 @@ class PortfolioApp:
         self.main_notebook.add(data_tab, text='已載入資料')
         self.main_notebook.add(self.log_tab, text='下載進度／LOG')
 
-        self._build_holding_table(holding_tab)
+        # 庫存頁左側為表格，右側為不需 API Key 的 AI 手動研究工作區。
+        self.holding_pane = ttk.Panedwindow(
+            holding_tab,
+            orient='horizontal',
+        )
+        self.holding_pane.pack(fill='both', expand=True)
+        holding_table_frame = ttk.Frame(self.holding_pane)
+        ai_sidebar_frame = ttk.Frame(self.holding_pane, padding=(8, 0, 0, 0))
+        self.holding_pane.add(holding_table_frame, weight=4)
+        self.holding_pane.add(ai_sidebar_frame, weight=1)
+
+        self._build_holding_table(holding_table_frame)
+        self._build_ai_sidebar(ai_sidebar_frame)
         self._build_dividend_tab(dividend_tab)
         self._build_loaded_data_tab(data_tab)
         self._build_log_tab(self.log_tab)
         self.main_notebook.bind(
             '<<NotebookTabChanged>>', self._on_main_tab_changed
         )
+        self.root.after(250, self._set_default_holding_sash)
 
     def _create_tree(
         self,
@@ -435,6 +493,7 @@ class PortfolioApp:
         widths,
         height=None,
     ):
+        """建立含雙向捲軸與欄位排序功能的 Treeview。"""
         frame = ttk.Frame(parent)
         frame.pack(fill='both', expand=True)
 
@@ -448,8 +507,16 @@ class PortfolioApp:
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
 
+        # 將排序狀態及原始標題保存在 Treeview 物件上。
+        tree._sort_reverse = {}  # type: ignore[attr-defined]
+        tree._heading_labels = dict(headings)  # type: ignore[attr-defined]
+
         for column in columns:
-            tree.heading(column, text=headings[column])
+            tree.heading(
+                column,
+                text=headings[column],
+                command=lambda c=column, t=tree: self._sort_treeview(t, c),
+            )
             tree.column(
                 column,
                 width=widths.get(column, 110),
@@ -474,6 +541,69 @@ class PortfolioApp:
         )
         return tree
 
+    @staticmethod
+    def _tree_sort_key(value: object) -> tuple[int, object]:
+        """
+        將表格顯示文字轉成適合排序的值。
+
+        支援金額、百分比、一般數字、YYYY-MM-DD／YYYY-MM 日期與文字。
+        """
+        text = str(value).strip()
+        if text in {'', '-', '未更新', '未提供'}:
+            return (9, '')
+
+        number_text = (
+            text.replace('NT$', '')
+            .replace(',', '')
+            .replace('%', '')
+            .replace('元', '')
+            .strip()
+        )
+        if re.fullmatch(r'[-+]?\d+(?:\.\d+)?', number_text):
+            return (0, float(number_text))
+
+        for format_text in ('%Y-%m-%d', '%Y/%m/%d', '%Y-%m', '%Y/%m'):
+            try:
+                return (1, datetime.strptime(text, format_text))
+            except ValueError:
+                continue
+
+        return (2, text.casefold())
+
+    def _sort_treeview(self, tree: ttk.Treeview, column: str) -> None:
+        """按欄位標題切換升冪／降冪，空白資料固定放在最後。"""
+        reverse_map = getattr(tree, '_sort_reverse', {})
+        reverse = bool(reverse_map.get(column, False))
+
+        populated = []
+        empty = []
+        for item_id in tree.get_children(''):
+            value = tree.set(item_id, column)
+            key = self._tree_sort_key(value)
+            if key[0] == 9:
+                empty.append((key, item_id))
+            else:
+                populated.append((key, item_id))
+
+        populated.sort(key=lambda item: item[0], reverse=reverse)
+        ordered = populated + empty
+        for index, (_key, item_id) in enumerate(ordered):
+            tree.move(item_id, '', index)
+
+        reverse_map[column] = not reverse
+        tree._sort_reverse = reverse_map  # type: ignore[attr-defined]
+
+        labels = getattr(tree, '_heading_labels', {})
+        for other_column, label in labels.items():
+            marker = ''
+            if other_column == column:
+                marker = ' ▼' if reverse else ' ▲'
+            tree.heading(
+                other_column,
+                text=f'{label}{marker}',
+                command=lambda c=other_column, t=tree: self._sort_treeview(t, c),
+            )
+
     def _build_holding_table(self, parent) -> None:
         columns = (
             'symbol', 'code', 'name', 'market', 'shares', 'cost',
@@ -497,6 +627,239 @@ class PortfolioApp:
         self.holding_tree.bind(
             '<<TreeviewSelect>>', self.on_holding_selected
         )
+
+    def _build_ai_sidebar(self, parent) -> None:
+        """
+        建立不需 API Key 的 AI 手動研究工作區。
+
+        程式只整理持股資料、產生提示詞及開啟網站；不會在背景自動登入、
+        讀取 ChatGPT／Gemini 帳號，亦不會自動執行交易。
+        """
+        header = ttk.Frame(parent, style='Card.TFrame', padding=9)
+        header.pack(fill='x', pady=(0, 8))
+        ttk.Label(
+            header,
+            text='AI 研究工作區（手動模式）',
+            style='Card.TLabel',
+            font=('', 12, 'bold'),
+        ).pack(anchor='w')
+        ttk.Label(
+            header,
+            textvariable=self.ai_selected_var,
+            style='Card.TLabel',
+            foreground=self.colors['primary_dark'],
+            wraplength=330,
+        ).pack(anchor='w', pady=(4, 0))
+        ttk.Label(
+            header,
+            text='選取左側持股後，複製提示詞並開啟 AI 網頁。',
+            style='Card.TLabel',
+            foreground=self.colors['muted'],
+            wraplength=330,
+        ).pack(anchor='w', pady=(3, 0))
+
+        news_frame = ttk.LabelFrame(
+            parent,
+            text='持有個股新聞研究',
+            padding=7,
+        )
+        news_frame.pack(fill='both', expand=True, pady=(0, 8))
+        self.ai_news_text = scrolledtext.ScrolledText(
+            news_frame,
+            wrap='word',
+            height=10,
+            font=('', 10),
+            background='#F8FAFC',
+            foreground=self.colors['text'],
+        )
+        self.ai_news_text.pack(fill='both', expand=True)
+        news_buttons = ttk.Frame(news_frame)
+        news_buttons.pack(fill='x', pady=(6, 0))
+        ttk.Button(
+            news_buttons,
+            text='複製提示詞',
+            command=lambda: self._copy_ai_prompt('news'),
+        ).pack(side='left', padx=(0, 4))
+        ttk.Button(
+            news_buttons,
+            text='貼上 AI 回覆',
+            command=lambda: self._paste_ai_response(self.ai_news_text),
+        ).pack(side='left', padx=4)
+
+        analysis_frame = ttk.LabelFrame(
+            parent,
+            text='加倉／減倉／操作研究',
+            padding=7,
+        )
+        analysis_frame.pack(fill='both', expand=True)
+        self.ai_analysis_text = scrolledtext.ScrolledText(
+            analysis_frame,
+            wrap='word',
+            height=10,
+            font=('', 10),
+            background='#F8FAFC',
+            foreground=self.colors['text'],
+        )
+        self.ai_analysis_text.pack(fill='both', expand=True)
+        analysis_buttons = ttk.Frame(analysis_frame)
+        analysis_buttons.pack(fill='x', pady=(6, 0))
+        ttk.Button(
+            analysis_buttons,
+            text='複製提示詞',
+            command=lambda: self._copy_ai_prompt('analysis'),
+        ).pack(side='left', padx=(0, 4))
+        ttk.Button(
+            analysis_buttons,
+            text='貼上 AI 回覆',
+            command=lambda: self._paste_ai_response(self.ai_analysis_text),
+        ).pack(side='left', padx=4)
+
+        launch_frame = ttk.Frame(parent)
+        launch_frame.pack(fill='x', pady=(8, 0))
+        ttk.Button(
+            launch_frame,
+            text='開啟 ChatGPT',
+            command=lambda: self._open_ai_site('chatgpt'),
+            style='Accent.TButton',
+        ).pack(side='left', fill='x', expand=True, padx=(0, 4))
+        ttk.Button(
+            launch_frame,
+            text='開啟 Gemini',
+            command=lambda: self._open_ai_site('gemini'),
+        ).pack(side='left', fill='x', expand=True, padx=(4, 0))
+
+        self._set_text_widget(
+            self.ai_news_text,
+            '請先在左側庫存表選取一檔持股。',
+        )
+        self._set_text_widget(
+            self.ai_analysis_text,
+            '請先在左側庫存表選取一檔持股。',
+        )
+
+    @staticmethod
+    def _set_text_widget(widget: tk.Text, content: str) -> None:
+        widget.delete('1.0', 'end')
+        widget.insert('1.0', content)
+
+    def _selected_holding_view(self):
+        selected = self.holding_tree.selection()
+        if not selected:
+            return None
+        values = self.holding_tree.item(selected[0], 'values')
+        if not values:
+            return None
+        return self._holding_view_by_symbol.get(str(values[0]))
+
+    def _build_news_prompt(self, view) -> str:
+        today_text = date.today().isoformat()
+        return (
+            f'今天是 {today_text}。請使用網路搜尋，研究台灣證券 {view.stock_code} '
+            f'{view.stock_name}（Yahoo Symbol：{view.symbol}）最近 30 天的重要新聞。\n\n'
+            '請依序整理：\n'
+            '1. 最新營收、財報、法說、接單、產業與重大訊息。\n'
+            '2. 可能影響股價或股利能力的正面與負面因素。\n'
+            '3. 每則資訊標示日期、來源與可開啟的引用。\n'
+            '4. 明確區分已確認事實、媒體推測與你的推論。\n'
+            '5. 最後列出未來 30～90 天值得追蹤的事件。\n\n'
+            f'目前持有：{view.shares:,} 股；平均成本 NT$ {view.average_cost:,.2f}；'
+            f'最近收盤 NT$ {view.close:,.2f}；未實現報酬率 {view.return_rate:,.2f}%。'
+        )
+
+    def _build_analysis_prompt(self, view) -> str:
+        selected_dividends = [
+            item for item in self._dividend_projections
+            if item.symbol == view.symbol
+        ]
+        realized = sum(
+            item.estimated_amount for item in selected_dividends
+            if item.status == REALIZED
+        )
+        pending = sum(
+            item.estimated_amount for item in selected_dividends
+            if item.status == PENDING
+        )
+        return (
+            '請以台股投資研究員角度，根據下列持股資料及最新可查證資訊，'
+            '評估加倉、續抱、減倉或等待的條件。請勿只給單一結論，並避免保證報酬。\n\n'
+            f'標的：{view.stock_code} {view.stock_name}（{view.symbol}）\n'
+            f'市場：{self._market_label(view.market_segment)}\n'
+            f'持有股數：{view.shares:,} 股\n'
+            f'總成本：NT$ {view.total_cost:,.0f}\n'
+            f'平均成本：NT$ {view.average_cost:,.2f}\n'
+            f'最近收盤：NT$ {view.close:,.2f}\n'
+            f'庫存市值：NT$ {view.market_value:,.0f}\n'
+            f'未實現損益：NT$ {view.profit:,.0f}（{view.return_rate:,.2f}%）\n'
+            f'目前分析年度股利：已實現約 NT$ {realized:,.0f}；未領／預估約 NT$ {pending:,.0f}。\n\n'
+            '請輸出：\n'
+            '1. 基本面、產業面、籌碼／估值與股利持續性的重點。\n'
+            '2. 加倉、續抱、減倉三種情境各自的觸發條件。\n'
+            '3. 需要避免加碼的風險訊號。\n'
+            '4. 以小幅／中幅／大幅調整持股比例的方式說明，不要直接替我下單。\n'
+            '5. 所有最新事實附日期與來源，並清楚標示推論。'
+        )
+
+    def _refresh_ai_prompts(self) -> None:
+        view = self._selected_holding_view()
+        if view is None:
+            self.ai_selected_var.set('請先在庫存表選取一檔持股')
+            return
+        self.ai_selected_var.set(
+            f'{view.stock_code} {view.stock_name}｜{view.shares:,} 股｜'
+            f'報酬率 {view.return_rate:,.2f}%'
+        )
+        self._set_text_widget(self.ai_news_text, self._build_news_prompt(view))
+        self._set_text_widget(
+            self.ai_analysis_text,
+            self._build_analysis_prompt(view),
+        )
+
+    def _copy_ai_prompt(self, prompt_type: str) -> None:
+        view = self._selected_holding_view()
+        if view is None:
+            messagebox.showinfo('尚未選取', '請先在庫存表選取一檔持股。')
+            return
+        prompt = (
+            self._build_news_prompt(view)
+            if prompt_type == 'news'
+            else self._build_analysis_prompt(view)
+        )
+        self.root.clipboard_clear()
+        self.root.clipboard_append(prompt)
+        target = self.ai_news_text if prompt_type == 'news' else self.ai_analysis_text
+        self._set_text_widget(target, prompt)
+        self.status_var.set('提示詞已複製，可貼到 ChatGPT 或 Gemini。')
+
+    def _paste_ai_response(self, widget: tk.Text) -> None:
+        try:
+            content = self.root.clipboard_get()
+        except tk.TclError:
+            messagebox.showinfo('剪貼簿為空', '請先複製 AI 回覆內容。')
+            return
+        self._set_text_widget(widget, str(content))
+
+    @staticmethod
+    def _open_ai_site(provider: str) -> None:
+        url = (
+            'https://chatgpt.com/'
+            if provider == 'chatgpt'
+            else 'https://gemini.google.com/app'
+        )
+        webbrowser.open_new_tab(url)
+
+    def _set_default_holding_sash(self) -> None:
+        """預設為 AI 工作區保留約 360px 寬度。"""
+        pane = getattr(self, 'holding_pane', None)
+        if pane is None:
+            return
+        pane.update_idletasks()
+        width = pane.winfo_width()
+        if width < 900:
+            return
+        try:
+            pane.sashpos(0, max(width - 380, int(width * 0.68)))
+        except tk.TclError:
+            pass
 
     def _build_dividend_tab(self, parent) -> None:
         controls = ttk.Frame(parent)
@@ -1036,11 +1399,157 @@ class PortfolioApp:
             return value
         return MARKET_LABEL_TO_KEY.get(value, 'AUTO')
 
+    def _find_local_instrument(self, code: str):
+        """優先使用本機商品清冊，避免輸入持股時每次都連線 Yahoo。"""
+        candidates = self.database.find_instruments_by_code(code)
+        if not candidates:
+            return None
+
+        selected_market = self._selected_market_key()
+        if selected_market != 'AUTO':
+            matched = [
+                item for item in candidates
+                if item.market_segment == selected_market
+                or (
+                    selected_market == 'TWSE'
+                    and item.symbol.endswith('.TW')
+                )
+                or (
+                    selected_market in {'TPEX', 'EMERGING'}
+                    and item.symbol.endswith('.TWO')
+                )
+            ]
+            if matched:
+                candidates = matched
+
+        category_priority = {
+            'TWSE_STOCK': 0,
+            'TPEX_STOCK': 0,
+            'TWSE_ETF': 1,
+            'TPEX_ETF': 1,
+            'ETN': 2,
+            'OTHER': 3,
+            'WARRANT': 4,
+        }
+        candidates.sort(
+            key=lambda item: (
+                category_priority.get(item.product_category, 9),
+                0 if item.symbol.endswith('.TW') else 1,
+                item.symbol,
+            )
+        )
+        return candidates[0]
+
+    def _apply_resolved_instrument(
+        self,
+        instrument,
+        focus_shares: bool = True,
+    ) -> None:
+        self.stock_code_var.set(instrument.stock_code)
+        self.yahoo_symbol_var.set(instrument.symbol)
+        self.stock_name_var.set(instrument.name)
+        if self._selected_market_key() == 'AUTO':
+            self.market_var.set(
+                self._market_label(instrument.market_segment)
+            )
+        self.status_var.set(
+            f'已辨識：{instrument.stock_code} {instrument.name}'
+        )
+        if focus_shares:
+            self.root.after_idle(self._focus_shares_entry)
+
+    def _resolve_input_async(self, code: str) -> None:
+        """輸入流程專用解析：不切換到 LOG 分頁。"""
+        if self.busy:
+            messagebox.showinfo(
+                '作業進行中',
+                '目前有資料同步作業進行中，請稍後再解析代號。',
+            )
+            self._focus_stock_code_entry()
+            return
+
+        self.status_var.set(f'正在解析 {code}……')
+        self._set_busy(True)
+
+        def task():
+            try:
+                instrument = self.sync_service.resolve_and_save_instrument(
+                    code,
+                    self._selected_market_key(),
+                )
+            except Exception as exc:
+                message = str(exc)
+                self.root.after(
+                    0,
+                    lambda m=message: self._finish_input_resolve_error(m),
+                )
+            else:
+                self.root.after(
+                    0,
+                    lambda item=instrument: self._finish_input_resolve(item),
+                )
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _finish_input_resolve(self, instrument) -> None:
+        self._set_busy(False)
+        self._apply_resolved_instrument(instrument, focus_shares=True)
+        self.refresh_loaded_data_view()
+
+    def _finish_input_resolve_error(self, message: str) -> None:
+        self._set_busy(False)
+        self.status_var.set('代號解析失敗')
+        messagebox.showerror('代號解析失敗', message)
+        self._focus_stock_code_entry()
+
+    def _on_stock_code_commit(self, _event=None):
+        code = normalize_stock_code(self.stock_code_var.get())
+        if not code:
+            self.root.bell()
+            self._focus_stock_code_entry()
+            return 'break'
+
+        # 使用者改了代號時，清除上一檔解析結果。
+        current_symbol = self.yahoo_symbol_var.get().strip()
+        if current_symbol and not current_symbol.startswith(code):
+            self.yahoo_symbol_var.set('')
+            self.stock_name_var.set('')
+
+        local_instrument = self._find_local_instrument(code)
+        if local_instrument is not None:
+            self._apply_resolved_instrument(local_instrument, focus_shares=True)
+        else:
+            self._resolve_input_async(code)
+        return 'break'
+
+    def _on_shares_commit(self, _event=None):
+        try:
+            shares = int(self.shares_var.get().replace(',', '').strip())
+            if shares <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror('輸入錯誤', '持有股數必須是大於 0 的整數。')
+            self._focus_shares_entry()
+            return 'break'
+        self.root.after_idle(self._focus_total_cost_entry)
+        return 'break'
+
+    def _on_total_cost_commit(self, _event=None):
+        self.confirm_save_holding()
+        return 'break'
+
     def resolve_symbol(self) -> None:
         code = normalize_stock_code(self.stock_code_var.get())
         if not code:
             messagebox.showwarning('欄位不足', '請輸入股票代號。')
+            self._focus_stock_code_entry()
             return
+
+        local_instrument = self._find_local_instrument(code)
+        if local_instrument is not None:
+            self._apply_resolved_instrument(local_instrument, focus_shares=True)
+            return
+
         self._run_background(
             f'正在解析 {code}……',
             lambda: self.sync_service.resolve_and_save_instrument(
@@ -1050,28 +1559,24 @@ class PortfolioApp:
         )
 
     def _after_resolve(self, instrument) -> None:
-        self.stock_code_var.set(instrument.stock_code)
-        self.yahoo_symbol_var.set(instrument.symbol)
-        self.stock_name_var.set(instrument.name)
-        if self._selected_market_key() == 'AUTO':
-            self.market_var.set(
-                self._market_label(instrument.market_segment)
-            )
+        self._apply_resolved_instrument(instrument, focus_shares=True)
         message = f'已解析：{instrument.symbol} {instrument.name}'
         self.refresh_loaded_data_view()
         self._finish_operation(message)
 
-    def save_holding(self) -> None:
+    def _holding_from_form(self) -> Holding | None:
         code = normalize_stock_code(self.stock_code_var.get())
         symbol = self.yahoo_symbol_var.get().strip().upper()
         name = self.stock_name_var.get().strip()
         if not symbol or not name:
-            messagebox.showwarning('尚未解析', '請先按「解析代號」。')
-            return
-        try:
-            shares = int(
-                self.shares_var.get().replace(',', '').strip()
+            messagebox.showwarning(
+                '尚未解析',
+                '請先輸入股票代號並按 Enter 或 Tab，讓程式帶入股票名稱。',
             )
+            self._focus_stock_code_entry()
+            return None
+        try:
+            shares = int(self.shares_var.get().replace(',', '').strip())
             total_cost = float(
                 self.total_cost_var.get().replace(',', '').strip()
             )
@@ -1080,25 +1585,64 @@ class PortfolioApp:
                 '輸入錯誤',
                 '股數必須是整數，總成本必須是數字。',
             )
-            return
+            return None
         if shares <= 0 or total_cost < 0:
             messagebox.showerror(
                 '輸入錯誤',
                 '股數必須大於 0，總成本不可小於 0。',
             )
-            return
-        self.database.upsert_holding(
-            Holding(
-                None,
-                code,
-                symbol,
-                name,
-                self._selected_market_key(),
-                shares,
-                total_cost,
-            )
+            return None
+        return Holding(
+            None,
+            code,
+            symbol,
+            name,
+            self._selected_market_key(),
+            shares,
+            total_cost,
         )
-        self.status_var.set(f'已儲存 {symbol}')
+
+    def confirm_save_holding(self) -> None:
+        """
+        顯示確認視窗；messagebox 預設按鈕可直接再按一次 Enter 完成。
+        """
+        holding = self._holding_from_form()
+        if holding is None:
+            return
+
+        average_cost = (
+            holding.total_cost / holding.shares
+            if holding.shares > 0
+            else 0.0
+        )
+        existing_symbols = {
+            item.yahoo_symbol for item in self.database.list_holdings()
+        }
+        action_text = '更新' if holding.yahoo_symbol in existing_symbols else '新增'
+        confirmed = messagebox.askokcancel(
+            f'確認{action_text}持股',
+            f'{holding.stock_code} {holding.stock_name}\n'
+            f'持有股數：{holding.shares:,} 股\n'
+            f'持有總成本：NT$ {holding.total_cost:,.0f}\n'
+            f'平均成本：NT$ {average_cost:,.2f}\n\n'
+            f'按 Enter 或「確定」完成{action_text}。',
+            default='ok',
+        )
+        if not confirmed:
+            self._focus_total_cost_entry()
+            return
+        self.save_holding(holding)
+
+    def save_holding(self, holding: Holding | None = None) -> None:
+        """寫入資料庫；可由確認流程傳入已驗證的 Holding。"""
+        if holding is None:
+            holding = self._holding_from_form()
+            if holding is None:
+                return
+        self.database.upsert_holding(holding)
+        self.status_var.set(
+            f'已儲存 {holding.stock_code} {holding.stock_name}'
+        )
         self.clear_form()
         self.refresh_all_views()
         self.root.after_idle(self._focus_stock_code_entry)
@@ -1134,6 +1678,7 @@ class PortfolioApp:
         )
         self.shares_var.set(str(values[4]).replace(',', ''))
         self.total_cost_var.set(str(values[5]).replace(',', ''))
+        self._refresh_ai_prompts()
 
     def clear_form(self) -> None:
         variables = (
@@ -1147,11 +1692,30 @@ class PortfolioApp:
             variable.set('')
         self.market_var.set(MARKET_CHOICES['AUTO'])
 
+    def clear_form_and_focus(self) -> None:
+        self.clear_form()
+        self.root.after_idle(self._focus_stock_code_entry)
+
     def _focus_stock_code_entry(self) -> None:
         """儲存完成後將輸入焦點移回股票代號，方便連續輸入。"""
         entry = getattr(self, 'stock_code_entry', None)
         if entry is not None:
             entry.focus_set()
+            entry.selection_range(0, 'end')
+            entry.icursor('end')
+
+    def _focus_shares_entry(self) -> None:
+        entry = getattr(self, 'shares_entry', None)
+        if entry is not None:
+            entry.focus_set()
+            entry.selection_range(0, 'end')
+            entry.icursor('end')
+
+    def _focus_total_cost_entry(self) -> None:
+        entry = getattr(self, 'total_cost_entry', None)
+        if entry is not None:
+            entry.focus_set()
+            entry.selection_range(0, 'end')
             entry.icursor('end')
 
     def _set_default_dividend_sash(self) -> None:
@@ -1181,6 +1745,8 @@ class PortfolioApp:
             return
         if selected is getattr(self, 'dividend_tab', None):
             self.root.after(80, self._set_default_dividend_sash)
+        elif selected is getattr(self, 'holding_tab', None):
+            self.root.after(80, self._set_default_holding_sash)
 
     def refresh_all_views(self) -> None:
         self.refresh_holding_view()
@@ -1188,10 +1754,18 @@ class PortfolioApp:
         self.refresh_loaded_data_view()
 
     def refresh_holding_view(self) -> None:
+        selected_symbol = ''
+        current_selection = self.holding_tree.selection()
+        if current_selection:
+            values = self.holding_tree.item(current_selection[0], 'values')
+            if values:
+                selected_symbol = str(values[0])
+
         holdings = self.database.list_holdings()
         views = build_holding_views(
             holdings, self.database.get_quote_map()
         )
+        self._holding_view_by_symbol = {item.symbol: item for item in views}
         summary = summarize_portfolio(views)
 
         self.holding_tree.tag_configure(
@@ -1207,13 +1781,14 @@ class PortfolioApp:
         for item in self.holding_tree.get_children():
             self.holding_tree.delete(item)
 
+        selected_item_id = None
         for view in views:
             row_tag = (
                 'positive' if view.profit > 0
                 else 'negative' if view.profit < 0
                 else 'neutral'
             )
-            self.holding_tree.insert(
+            item_id = self.holding_tree.insert(
                 '',
                 'end',
                 values=(
@@ -1232,6 +1807,15 @@ class PortfolioApp:
                 ),
                 tags=(row_tag,),
             )
+            if view.symbol == selected_symbol:
+                selected_item_id = item_id
+
+        if selected_item_id is not None:
+            self.holding_tree.selection_set(selected_item_id)
+            self.holding_tree.focus(selected_item_id)
+            self._refresh_ai_prompts()
+        elif not views:
+            self.ai_selected_var.set('請先在庫存表選取一檔持股')
 
         self.summary_cost_var.set(
             f'NT$ {money(summary.total_cost)}'
@@ -1352,6 +1936,8 @@ class PortfolioApp:
 
         self._render_dividend_month_components()
         self._render_dividend_chart(monthly, projections, target_year)
+        if self.holding_tree.selection():
+            self._refresh_ai_prompts()
 
     def _render_dividend_month_components(self) -> None:
         """更新使用者目前選定月份的個股／ETF 組成表。"""
@@ -1494,7 +2080,9 @@ class PortfolioApp:
         if max_total > 0:
             ax.set_ylim(0, max_total * 1.20)
 
-        legend_symbols = symbols[:12]
+        # 預設使用單欄；只有實際可用高度不足時才自動增加欄數。
+        # 最多顯示 30 檔，其餘以一個彙總項目表示。
+        legend_symbols = symbols[:30]
         legend_handles = [
             Patch(
                 facecolor=symbol_colors[symbol],
@@ -1529,7 +2117,21 @@ class PortfolioApp:
                     label='斜線＝未領／公告／估算',
                 ),
             ])
-            legend_columns = 2 if len(legend_handles) > 9 else 1
+
+            canvas_widget = self.dividend_canvas.get_tk_widget()
+            canvas_widget.update_idletasks()
+            canvas_height = max(canvas_widget.winfo_height(), 420)
+
+            # 每列圖例約需要 21px，再保留標題與上下空間。
+            available_rows = max(7, int((canvas_height - 115) / 21))
+            legend_columns = max(
+                1,
+                math.ceil(len(legend_handles) / available_rows),
+            )
+            legend_columns = min(legend_columns, 4)
+
+            # 欄數越多，為右側圖例保留越多水平空間。
+            chart_right = max(0.54, 0.81 - 0.075 * (legend_columns - 1))
             ax.legend(
                 handles=legend_handles,
                 loc='upper left',
@@ -1543,7 +2145,7 @@ class PortfolioApp:
             )
             self.dividend_figure.subplots_adjust(
                 left=0.065,
-                right=0.70 if legend_columns == 2 else 0.79,
+                right=chart_right,
                 top=0.83,
                 bottom=0.14,
             )
