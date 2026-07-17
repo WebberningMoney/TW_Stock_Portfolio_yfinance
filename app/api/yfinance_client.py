@@ -35,24 +35,16 @@ except ImportError:  # pragma: no cover
     YfData = None
 
 from app.config import (
-    ACTION_PERIOD,
-    ENABLE_PRICE_REPAIR,
-    HTTP_ITEM_RETRIES,
     LOCALIZED_NAME_BATCH_SIZE,
     LOCALIZED_NAME_WORKERS,
     NAME_OVERRIDES_PATH,
-    QUOTE_BATCH_SIZE,
-    QUOTE_INTERVAL,
-    QUOTE_PERIOD,
-    RETRY_BACKOFF_SECONDS,
-    SCREENER_MAX_PAGES,
-    SCREENER_PAGE_SIZE,
     YFINANCE_CACHE_DIR,
     YAHOO_LOCALIZED_QUOTE_URL,
     YAHOO_LOCALIZED_SEARCH_URL,
     YAHOO_TW_QUOTE_PAGE,
 )
 from app.models import CorporateAction, Instrument, MarketQuote
+from app.settings import RuntimeSettings
 from app.utils import (
     chunks,
     contains_cjk,
@@ -82,7 +74,8 @@ def _emit(
 class YFinanceClient:
     """行情、清冊、名稱與股利／分割資料的網路資料來源。"""
 
-    def __init__(self) -> None:
+    def __init__(self, settings: RuntimeSettings | None = None) -> None:
+        self.settings = (settings or RuntimeSettings()).normalized()
         YFINANCE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         try:
             yf.set_tz_cache_location(str(YFINANCE_CACHE_DIR))
@@ -90,7 +83,7 @@ class YFinanceClient:
             pass
 
         self.repair_enabled = bool(
-            ENABLE_PRICE_REPAIR
+            self.settings.enable_price_repair
             and importlib.util.find_spec('scipy') is not None
         )
 
@@ -104,6 +97,14 @@ class YFinanceClient:
                 self._yf_data = None
 
         self._ensure_name_override_template()
+
+    def update_settings(self, settings: RuntimeSettings) -> None:
+        """套用 GUI 儲存的新設定，不必重啟程式。"""
+        self.settings = settings.normalized()
+        self.repair_enabled = bool(
+            self.settings.enable_price_repair
+            and importlib.util.find_spec('scipy') is not None
+        )
 
     @staticmethod
     def _ensure_name_override_template() -> None:
@@ -455,8 +456,8 @@ class YFinanceClient:
         discovered: dict[str, Instrument] = {}
         seen_raw_symbols: set[str] = set()
 
-        for page in range(SCREENER_MAX_PAGES):
-            offset = page * SCREENER_PAGE_SIZE
+        for page in range(self.settings.screener_max_pages):
+            offset = page * self.settings.screener_page_size
             _emit(
                 progress,
                 f'Yahoo Screener：{origin_kind} offset={offset}',
@@ -466,7 +467,7 @@ class YFinanceClient:
                 response = yf.screen(
                     query,
                     offset=offset,
-                    size=SCREENER_PAGE_SIZE,
+                    size=self.settings.screener_page_size,
                     sortField='ticker',
                     sortAsc=True,
                 )
@@ -505,7 +506,7 @@ class YFinanceClient:
                     discovered[instrument.symbol] = instrument
 
             total = response.get('total') if isinstance(response, dict) else None
-            if len(quotes) < SCREENER_PAGE_SIZE:
+            if len(quotes) < self.settings.screener_page_size:
                 break
             if (
                 isinstance(total, int)
@@ -744,7 +745,7 @@ class YFinanceClient:
         symbols = sorted(by_symbol)
         quotes_by_symbol: dict[str, MarketQuote] = {}
         failed_candidates: set[str] = set()
-        batches = list(chunks(symbols, QUOTE_BATCH_SIZE))
+        batches = list(chunks(symbols, self.settings.quote_batch_size))
 
         def parse_quote(symbol: str, data: pd.DataFrame) -> MarketQuote | None:
             frame = self._extract_symbol_frame(data, symbol)
@@ -790,16 +791,17 @@ class YFinanceClient:
             try:
                 data = yf.download(
                     tickers=batch,
-                    period=QUOTE_PERIOD,
-                    interval=QUOTE_INTERVAL,
+                    period=self.settings.quote_period,
+                    interval=self.settings.quote_interval,
                     group_by='ticker',
                     auto_adjust=False,
                     actions=False,
-                    threads=min(8, len(batch)),
+                    threads=min(self.settings.download_threads, len(batch)),
                     repair=self.repair_enabled,
                     progress=False,
                     keepna=False,
                     multi_level_index=True,
+                    timeout=self.settings.yfinance_timeout_seconds,
                 )
             except Exception as exc:
                 failed_candidates.update(batch)
@@ -828,6 +830,8 @@ class YFinanceClient:
                 batch_index,
                 len(batches),
             )
+            if self.settings.quote_batch_delay_seconds > 0:
+                time.sleep(self.settings.quote_batch_delay_seconds)
 
         # 批次下載失敗的商品逐檔重試，最多三次。
         retry_symbols = sorted(
@@ -838,19 +842,19 @@ class YFinanceClient:
         for item_index, symbol in enumerate(retry_symbols, start=1):
             success = False
             last_error = '沒有有效收盤價'
-            for attempt in range(1, HTTP_ITEM_RETRIES + 1):
+            for attempt in range(1, self.settings.item_retries + 1):
                 _emit(
                     progress,
                     f'行情重試 {item_index}/{len(retry_symbols)}：{symbol} '
-                    f'第 {attempt}/{HTTP_ITEM_RETRIES} 次',
+                    f'第 {attempt}/{self.settings.item_retries} 次',
                     item_index,
                     len(retry_symbols),
                 )
                 try:
                     data = yf.download(
                         tickers=[symbol],
-                        period=QUOTE_PERIOD,
-                        interval=QUOTE_INTERVAL,
+                        period=self.settings.quote_period,
+                        interval=self.settings.quote_interval,
                         group_by='ticker',
                         auto_adjust=False,
                         actions=False,
@@ -859,6 +863,7 @@ class YFinanceClient:
                         progress=False,
                         keepna=False,
                         multi_level_index=True,
+                        timeout=self.settings.yfinance_timeout_seconds,
                     )
                     quote = parse_quote(symbol, data)
                     if quote is None:
@@ -880,14 +885,14 @@ class YFinanceClient:
                         item_index,
                         len(retry_symbols),
                     )
-                    if attempt < HTTP_ITEM_RETRIES:
-                        time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+                    if attempt < self.settings.item_retries:
+                        time.sleep(self.settings.retry_backoff_seconds * attempt)
 
             if not success:
                 final_failed.append(symbol)
                 _emit(
                     progress,
-                    f'行情最終失敗：{symbol}；重試 {HTTP_ITEM_RETRIES} 次後'
+                    f'行情最終失敗：{symbol}；重試 {self.settings.item_retries} 次後'
                     f'仍無法取得（{last_error}）',
                     item_index,
                     len(retry_symbols),
@@ -910,7 +915,7 @@ class YFinanceClient:
         """取得 Yahoo 可用的完整歷史股利與股票分割。"""
         try:
             history = yf.Ticker(instrument.symbol).history(
-                period=ACTION_PERIOD,
+                period=self.settings.action_period,
                 interval='1d',
                 auto_adjust=False,
                 actions=True,

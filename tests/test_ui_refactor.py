@@ -30,5 +30,7 @@ def test_refactor_method_surface() -> None:
         'confirm_save_holding',
         '_sort_treeview',
         '_bind_global_shortcuts',
+        '_build_settings_tab',
+        'run_single_test_async',
     }
     assert required.issubset(method_names)

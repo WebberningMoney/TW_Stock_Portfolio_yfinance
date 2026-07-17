@@ -10,9 +10,10 @@ import tkinter as tk
 from datetime import date
 from tkinter import ttk
 
-from app.config import MARKET_CHOICES
+from app.config import DIVIDEND_SOURCE_CHOICES, MARKET_CHOICES
 from app.db.database import Database
 from app.services.sync_service import SyncService
+from app.settings import SettingsStore
 from app.ui.mixins.ai_workspace import AiWorkspaceMixin
 from app.ui.mixins.base import StyleMixin
 from app.ui.mixins.dividend_page import DividendPageMixin
@@ -20,6 +21,7 @@ from app.ui.mixins.holdings import HoldingsMixin
 from app.ui.mixins.layout import LayoutMixin
 from app.ui.mixins.loaded_data_page import LoadedDataPageMixin
 from app.ui.mixins.operations import OperationsMixin
+from app.ui.mixins.settings_page import SettingsPageMixin
 
 
 class PortfolioApp(
@@ -29,12 +31,15 @@ class PortfolioApp(
     DividendPageMixin,
     LoadedDataPageMixin,
     OperationsMixin,
+    SettingsPageMixin,
     AiWorkspaceMixin,
 ):
     def __init__(self, root: tk.Tk, database: Database) -> None:
         self.root = root
         self.database = database
-        self.sync_service = SyncService(database)
+        self.settings_store = SettingsStore()
+        self.settings = self.settings_store.load()
+        self.sync_service = SyncService(database, settings=self.settings)
         self.busy = False
         self.sync_buttons: list[ttk.Button] = []
 
@@ -42,6 +47,9 @@ class PortfolioApp(
         self.yahoo_symbol_var = tk.StringVar()
         self.stock_name_var = tk.StringVar()
         self.market_var = tk.StringVar(value=MARKET_CHOICES['AUTO'])
+        self.dividend_source_var = tk.StringVar(
+            value=DIVIDEND_SOURCE_CHOICES[self.settings.dividend_source_mode]
+        )
         self.shares_var = tk.StringVar()
         self.total_cost_var = tk.StringVar()
         self.dividend_year_var = tk.StringVar(value=str(date.today().year))
@@ -87,8 +95,10 @@ class PortfolioApp(
         self.root.update_idletasks()
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        width = min(1680, max(1180, int(screen_w * 0.92)))
-        height = min(1080, max(760, int(screen_h * 0.88)))
+        # 盡量使用螢幕可用空間，仍保留少量邊界避免遮到 macOS 選單列／Dock。
+        width = min(1800, max(1180, int(screen_w * 0.96)))
+        height = max(760, screen_h - 48)
+        height = min(height, 1180)
         x = max((screen_w - width) // 2, 0)
         y = max((screen_h - height) // 2, 0)
         self.root.geometry(f'{width}x{height}+{x}+{y}')

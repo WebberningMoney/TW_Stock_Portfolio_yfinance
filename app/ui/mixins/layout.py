@@ -16,6 +16,7 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
 
 from app.config import (
+    DIVIDEND_SOURCE_CHOICES,
     EXPORT_DIR,
     MARKET_CHOICES,
     MARKET_LABEL_TO_KEY,
@@ -61,7 +62,7 @@ class LayoutMixin:
         ).pack(anchor='w')
         ttk.Label(
             title_box,
-            text='持股、損益、歷史股利、已公告股利與研究提示整合',
+            text='持股、損益、歷史 API、Yahoo 台灣公告爬蟲與研究提示整合',
             style='Header.Subtitle.TLabel',
         ).pack(anchor='w', pady=(2, 0))
 
@@ -79,7 +80,7 @@ class LayoutMixin:
         ttk.Label(bar, textvariable=self.status_var).pack(side='left')
         ttk.Label(
             bar,
-            text='v2.0.1｜資料僅供研究，不構成投資建議',
+            text='v2.1｜多來源資料僅供研究，不構成投資建議',
             foreground=self.colors['muted'],
         ).pack(side='right')
 
@@ -196,11 +197,13 @@ class LayoutMixin:
     def _build_sync_panel(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(
             parent,
-            text='yfinance 資料同步',
+            text='資料來源與同步',
             padding=8,
         )
         frame.pack(fill='x', pady=(0, 8))
 
+        first_row = ttk.Frame(frame)
+        first_row.pack(fill='x')
         button_specs = [
             (
                 '① 選擇類型並建立商品清冊',
@@ -208,11 +211,10 @@ class LayoutMixin:
             ),
             ('② 更新全部商品行情', self.sync_all_quotes_async),
             ('更新持股行情', self.sync_holding_quotes_async),
-            ('③ 更新持股股利／分割＋已公告股利', self.sync_actions_async),
         ]
         for index, (text, command) in enumerate(button_specs):
             button = ttk.Button(
-                frame,
+                first_row,
                 text=text,
                 command=command,
                 style='Accent.TButton' if index == 0 else 'TButton',
@@ -220,10 +222,39 @@ class LayoutMixin:
             button.pack(side='left', padx=4)
             self.sync_buttons.append(button)
 
+        ttk.Separator(frame, orient='horizontal').pack(fill='x', pady=7)
+        second_row = ttk.Frame(frame)
+        second_row.pack(fill='x')
+        ttk.Label(second_row, text='股利載入來源：').pack(side='left', padx=(4, 3))
+        self.dividend_source_combo = ttk.Combobox(
+            second_row,
+            textvariable=self.dividend_source_var,
+            values=list(DIVIDEND_SOURCE_CHOICES.values()),
+            state='readonly',
+            width=36,
+        )
+        self.dividend_source_combo.pack(side='left', padx=(0, 7))
+        self.dividend_source_combo.bind(
+            '<<ComboboxSelected>>',
+            lambda _event: self.remember_dividend_source(),
+        )
+        action_button = ttk.Button(
+            second_row,
+            text='③ 更新持股股利資料',
+            command=self.sync_actions_async,
+            style='Accent.TButton',
+        )
+        action_button.pack(side='left', padx=4)
+        self.sync_buttons.append(action_button)
+
         ttk.Label(
-            frame,
-            text='下載過程請查看「下載進度／LOG」分頁。',
-        ).pack(side='left', padx=14)
+            second_row,
+            text=(
+                '爬蟲適合補入已公告未發放股利；yfinance 適合歷史股利與股票分割。'
+                '下載過程請查看 LOG。'
+            ),
+            foreground=self.colors['muted'],
+        ).pack(side='left', padx=12)
 
     def _build_summary(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(
@@ -263,11 +294,13 @@ class LayoutMixin:
         dividend_tab = ttk.Frame(self.main_notebook, padding=7)
         self.dividend_tab = dividend_tab
         data_tab = ttk.Frame(self.main_notebook, padding=7)
+        self.settings_tab = ttk.Frame(self.main_notebook, padding=7)
         self.log_tab = ttk.Frame(self.main_notebook, padding=7)
 
         self.main_notebook.add(holding_tab, text='庫存與損益')
         self.main_notebook.add(dividend_tab, text='每月配息估算')
         self.main_notebook.add(data_tab, text='已載入資料')
+        self.main_notebook.add(self.settings_tab, text='抓取參數／單筆測試')
         self.main_notebook.add(self.log_tab, text='下載進度／LOG')
 
         # 庫存頁左側為表格，右側為不需 API Key 的 AI 手動研究工作區。
@@ -285,6 +318,7 @@ class LayoutMixin:
         self._build_ai_sidebar(ai_sidebar_frame)
         self._build_dividend_tab(dividend_tab)
         self._build_loaded_data_tab(data_tab)
+        self._build_settings_tab(self.settings_tab)
         self._build_log_tab(self.log_tab)
         self.main_notebook.bind(
             '<<NotebookTabChanged>>', self._on_main_tab_changed

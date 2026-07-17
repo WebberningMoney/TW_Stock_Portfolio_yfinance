@@ -16,6 +16,7 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
 
 from app.config import (
+    DIVIDEND_SOURCE_LABEL_TO_KEY,
     EXPORT_DIR,
     MARKET_CHOICES,
     MARKET_LABEL_TO_KEY,
@@ -219,13 +220,22 @@ class OperationsMixin:
         )
 
     def sync_actions_async(self) -> None:
+        source_mode = DIVIDEND_SOURCE_LABEL_TO_KEY.get(
+            self.dividend_source_var.get(),
+            'BOTH',
+        )
+        source_label = self.dividend_source_var.get()
+        self._append_log(f'本次股利載入來源：{source_label}')
         self._run_background(
-            '正在更新持股股利／分割與已公告股利……',
-            lambda: self.sync_service.sync_holding_actions(self._progress),
+            f'正在更新持股股利資料（{source_label}）……',
+            lambda: self.sync_service.sync_holding_actions(
+                source_mode=source_mode,
+                progress=self._progress,
+            ),
             lambda result: self._after_sync(
-                f'API／yfinance 歷史股利／分割 {result[0]} 筆；'
-                f'爬蟲／Yahoo 台灣已公告股利 {result[1]} 筆；'
-                f'最終失敗項目 {result[2]} 個'
+                f'yfinance 歷史股利／分割 {result.history_action_count} 筆；'
+                f'Yahoo 台灣公告股利 {result.announced_dividend_count} 筆；'
+                f'最終失敗項目 {result.failed_count} 個'
             ),
         )
 

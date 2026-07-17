@@ -29,13 +29,9 @@ from typing import Any
 from bs4 import BeautifulSoup
 import requests
 
-from app.config import (
-    HTTP_ITEM_RETRIES,
-    RETRY_BACKOFF_SECONDS,
-    YAHOO_TW_DIVIDEND_PAGE,
-    YAHOO_TW_REQUEST_DELAY_SECONDS,
-)
+from app.config import YAHOO_TW_DIVIDEND_PAGE
 from app.models import CorporateAction, Instrument
+from app.settings import RuntimeSettings
 
 ProgressCallback = Callable[[str, int | None, int | None], None]
 
@@ -281,7 +277,8 @@ def parse_dividend_html(
 class YahooTwDividendScraper:
     """低頻率抓取已登錄持股的 Yahoo 台灣股利政策頁。"""
 
-    def __init__(self) -> None:
+    def __init__(self, settings: RuntimeSettings | None = None) -> None:
+        self.settings = (settings or RuntimeSettings()).normalized()
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': (
@@ -293,6 +290,10 @@ class YahooTwDividendScraper:
             'Cache-Control': 'no-cache',
         })
 
+    def update_settings(self, settings: RuntimeSettings) -> None:
+        """套用 GUI 儲存的新抓取參數。"""
+        self.settings = settings.normalized()
+
     def fetch_dividends(
         self,
         instrument: Instrument,
@@ -302,16 +303,18 @@ class YahooTwDividendScraper:
         url = YAHOO_TW_DIVIDEND_PAGE.format(symbol=instrument.symbol)
         last_error: Exception | None = None
 
-        for attempt in range(1, HTTP_ITEM_RETRIES + 1):
+        for attempt in range(1, self.settings.item_retries + 1):
             try:
                 if progress:
                     progress(
                         f'[爬蟲／Yahoo 台灣已公告] {instrument.symbol}：'
-                        f'第 {attempt}/{HTTP_ITEM_RETRIES} 次嘗試',
+                        f'第 {attempt}/{self.settings.item_retries} 次嘗試',
                         attempt,
-                        HTTP_ITEM_RETRIES,
+                        self.settings.item_retries,
                     )
-                response = self.session.get(url, timeout=25)
+                response = self.session.get(
+                    url, timeout=self.settings.scraper_timeout_seconds
+                )
                 response.raise_for_status()
                 actions = parse_dividend_html(response.text, instrument)
 
@@ -321,7 +324,7 @@ class YahooTwDividendScraper:
                         '頁面內容不完整，可能被限流或頁面結構已改版'
                     )
 
-                time.sleep(YAHOO_TW_REQUEST_DELAY_SECONDS)
+                time.sleep(self.settings.scraper_delay_seconds)
                 return actions
             except Exception as exc:  # requests 與解析錯誤統一重試
                 last_error = exc
@@ -330,12 +333,12 @@ class YahooTwDividendScraper:
                         f'[爬蟲／Yahoo 台灣已公告] {instrument.symbol} 第 {attempt} 次失敗：'
                         f'{exc}',
                         attempt,
-                        HTTP_ITEM_RETRIES,
+                        self.settings.item_retries,
                     )
-                if attempt < HTTP_ITEM_RETRIES:
-                    time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+                if attempt < self.settings.item_retries:
+                    time.sleep(self.settings.retry_backoff_seconds * attempt)
 
         raise YahooTwScraperError(
             f'{instrument.symbol} 已公告股利頁重試 '
-            f'{HTTP_ITEM_RETRIES} 次仍失敗：{last_error}'
+            f'{self.settings.item_retries} 次仍失敗：{last_error}'
         )

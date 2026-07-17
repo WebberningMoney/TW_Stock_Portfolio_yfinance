@@ -55,7 +55,7 @@ class DividendPageMixin:
             controls,
             text=(
                 '已實現優先依現金發放日判定；未領包含已公告未發放與歷史模式估算。'
-                '金額均依目前持股股數估算，不等同券商實際入帳。'
+                '金額均依目前持股股數估算。'
             ),
             foreground=self.colors['muted'],
         ).pack(side='left', padx=16)
@@ -93,21 +93,26 @@ class DividendPageMixin:
                 style=style_name,
             ).pack(pady=(4, 0))
 
-        pane = ttk.Panedwindow(parent, orient='vertical')
+        # v2.1：改為左右切版。左側專注圖表，右側完整呈現摘要與明細。
+        pane = ttk.Panedwindow(parent, orient='horizontal')
         self.dividend_pane = pane
         pane.pack(fill='both', expand=True)
 
         chart_frame = ttk.LabelFrame(
             pane,
-            text='每月股利金額與持股組成（滑鼠移到月份可查看明細；點擊可切換月份組成）',
+            text='每月股利金額與持股組成（滑鼠移到月份可查看明細；點擊可切換月份）',
             padding=5,
         )
-        tables_frame = ttk.Frame(pane)
-        pane.add(chart_frame, weight=6)
+        tables_frame = ttk.LabelFrame(
+            pane,
+            text='月份與全年明細',
+            padding=5,
+        )
+        pane.add(chart_frame, weight=3)
         pane.add(tables_frame, weight=2)
 
         self.dividend_figure = Figure(
-            figsize=(14.0, 5.8),
+            figsize=(10.0, 7.2),
             dpi=100,
             facecolor=self.colors['surface'],
         )
@@ -117,10 +122,9 @@ class DividendPageMixin:
             master=chart_frame,
         )
         chart_widget = self.dividend_canvas.get_tk_widget()
-        chart_widget.configure(height=540)
+        chart_widget.configure(height=650)
         chart_widget.pack(fill='both', expand=True)
 
-        # 第一次顯示時給圖表較大的垂直空間，仍可由使用者拖曳分隔線調整。
         self.root.after_idle(self._set_default_dividend_sash)
         self.dividend_canvas.mpl_connect(
             'motion_notify_event', self._on_dividend_chart_hover
@@ -149,12 +153,12 @@ class DividendPageMixin:
                 'total': '月份合計',
             },
             {
-                'month': 120,
-                'realized': 170,
-                'pending': 170,
-                'total': 170,
+                'month': 105,
+                'realized': 135,
+                'pending': 135,
+                'total': 135,
             },
-            height=7,
+            height=14,
         )
         self.monthly_tree.tag_configure(
             'has_realized', foreground=self.colors['realized']
@@ -179,9 +183,9 @@ class DividendPageMixin:
         )
         ttk.Label(
             month_controls,
-            text='長條圖中同一顏色代表同一檔持股；斜線區塊為未領／估算。',
+            text='實心＝已實現；斜線＝未領／估算。',
             foreground=self.colors['muted'],
-        ).pack(side='left', padx=12)
+        ).pack(side='left', padx=10)
 
         self.dividend_component_tree = self._create_tree(
             component_tab,
@@ -196,15 +200,15 @@ class DividendPageMixin:
                 'basis': '依據',
             },
             {
-                'status': 110,
-                'code': 90,
-                'name': 160,
-                'shares': 110,
-                'dps': 110,
-                'amount': 135,
+                'status': 100,
+                'code': 80,
+                'name': 145,
+                'shares': 100,
+                'dps': 100,
+                'amount': 120,
                 'basis': 210,
             },
-            height=7,
+            height=14,
         )
         self.dividend_component_tree.tag_configure(
             REALIZED, foreground=self.colors['realized']
@@ -225,12 +229,12 @@ class DividendPageMixin:
             ),
         ))
         widths = {
-            'month': 90, 'status': 105, 'symbol': 105, 'name': 145,
-            'shares': 90, 'dps': 100, 'amount': 120, 'period': 95,
-            'basis': 250, 'reference': 105, 'payment': 105,
+            'month': 80, 'status': 95, 'symbol': 100, 'name': 130,
+            'shares': 80, 'dps': 90, 'amount': 110, 'period': 85,
+            'basis': 220, 'reference': 100, 'payment': 100,
         }
         self.dividend_tree = self._create_tree(
-            detail_tab, columns, headings, widths
+            detail_tab, columns, headings, widths, height=14
         )
         self.dividend_tree.tag_configure(
             REALIZED, foreground=self.colors['realized']
@@ -240,18 +244,16 @@ class DividendPageMixin:
         )
 
     def _set_default_dividend_sash(self) -> None:
-        """提高圖表區預設高度，避免標題、數值及圖例被裁切。"""
+        """左右切版預設讓圖表約占 58%，右側表格保留足夠寬度。"""
         pane = getattr(self, 'dividend_pane', None)
         if pane is None:
             return
         pane.update_idletasks()
-        height = pane.winfo_height()
-        if height < 350:
+        width = pane.winfo_width()
+        if width < 900:
             return
         try:
-            # 圖表約使用 74% 高度，並至少為下方表格保留 170px。
-            # 較大的上半部可避免圖表標題及右側圖例被裁切。
-            position = min(max(int(height * 0.74), 500), height - 170)
+            position = min(max(int(width * 0.58), 650), width - 520)
             pane.sashpos(0, position)
         except tk.TclError:
             pass
