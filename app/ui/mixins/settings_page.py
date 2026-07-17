@@ -16,7 +16,6 @@ from app.settings import RuntimeSettings
 
 class SettingsPageMixin:
     def _build_settings_tab(self, parent) -> None:
-        """建立一般參數、進階參數與單筆測試工具。"""
         intro = ttk.Frame(parent, style='Card.TFrame', padding=(12, 9))
         intro.pack(fill='x', pady=(0, 8))
         ttk.Label(
@@ -27,8 +26,8 @@ class SettingsPageMixin:
         ttk.Label(
             intro,
             text=(
-                '一般使用建議保留預設值；只有遇到限流、連線不穩或大量商品同步時，'
-                '再逐項調整。設定儲存後立即生效。'
+                '參數依「商品清冊、行情、股利／分割、Yahoo 台灣爬蟲」分組；'
+                '只有遇到限流、逾時或大量同步時才需要調整。'
             ),
             style='Header.Subtitle.TLabel',
         ).pack(anchor='w', pady=(2, 0))
@@ -41,23 +40,27 @@ class SettingsPageMixin:
         pane.add(right, weight=2)
 
         self._init_settings_variables()
-        self._build_general_settings(left)
-        self._build_advanced_settings(left)
+        self._build_universe_settings(left)
+        self._build_quote_settings(left)
+        self._build_dividend_settings(left)
+        self._build_resilience_settings(left)
         self._build_settings_actions(left)
         self._build_single_test_panel(right)
         self._build_parameter_guidance(right)
 
     def _init_settings_variables(self) -> None:
         settings = self.settings
+        self.setting_screener_page_size_var = tk.StringVar(
+            value=str(settings.screener_page_size)
+        )
+        self.setting_screener_max_pages_var = tk.StringVar(
+            value=str(settings.screener_max_pages)
+        )
         self.setting_quote_batch_var = tk.StringVar(
             value=str(settings.quote_batch_size)
         )
-        self.setting_quote_period_var = tk.StringVar(
-            value=settings.quote_period
-        )
-        self.setting_quote_interval_var = tk.StringVar(
-            value=settings.quote_interval
-        )
+        self.setting_quote_period_var = tk.StringVar(value=settings.quote_period)
+        self.setting_quote_interval_var = tk.StringVar(value=settings.quote_interval)
         self.setting_threads_var = tk.StringVar(
             value=str(settings.download_threads)
         )
@@ -70,17 +73,18 @@ class SettingsPageMixin:
         self.setting_repair_var = tk.BooleanVar(
             value=settings.enable_price_repair
         )
-        self.setting_action_period_var = tk.StringVar(
-            value=settings.action_period
+        self.setting_action_period_var = tk.StringVar(value=settings.action_period)
+        self.setting_action_batch_var = tk.StringVar(
+            value=str(settings.action_batch_size)
+        )
+        self.setting_action_threads_var = tk.StringVar(
+            value=str(settings.action_download_threads)
         )
         self.setting_action_delay_var = tk.StringVar(
             value=f'{settings.action_item_delay_seconds:g}'
         )
-        self.setting_retries_var = tk.StringVar(
-            value=str(settings.item_retries)
-        )
-        self.setting_backoff_var = tk.StringVar(
-            value=f'{settings.retry_backoff_seconds:g}'
+        self.setting_scraper_workers_var = tk.StringVar(
+            value=str(settings.scraper_workers)
         )
         self.setting_scraper_delay_var = tk.StringVar(
             value=f'{settings.scraper_delay_seconds:g}'
@@ -88,113 +92,162 @@ class SettingsPageMixin:
         self.setting_scraper_timeout_var = tk.StringVar(
             value=str(settings.scraper_timeout_seconds)
         )
-        self.setting_screener_page_size_var = tk.StringVar(
-            value=str(settings.screener_page_size)
-        )
-        self.setting_screener_max_pages_var = tk.StringVar(
-            value=str(settings.screener_max_pages)
+        self.setting_retries_var = tk.StringVar(value=str(settings.item_retries))
+        self.setting_backoff_var = tk.StringVar(
+            value=f'{settings.retry_backoff_seconds:g}'
         )
 
         self.single_test_symbol_var = tk.StringVar(value='0050.TW')
-        self.single_test_mode_var = tk.StringVar(
-            value=SINGLE_TEST_CHOICES['ALL']
+        self.single_test_mode_var = tk.StringVar(value=SINGLE_TEST_CHOICES['ALL'])
+
+    @staticmethod
+    def _add_setting_row(
+        frame,
+        row: int,
+        label: str,
+        variable,
+        hint: str,
+        column_pair: int = 0,
+        width: int = 9,
+    ) -> None:
+        column = column_pair * 2
+        ttk.Label(frame, text=label).grid(
+            row=row, column=column, sticky='e', padx=(4, 5), pady=4
+        )
+        box = ttk.Frame(frame)
+        box.grid(row=row, column=column + 1, sticky='w', pady=4)
+        ttk.Entry(box, textvariable=variable, width=width).pack(side='left')
+        ttk.Label(box, text=hint, foreground='#64748B').pack(
+            side='left', padx=(7, 0)
         )
 
-    def _build_general_settings(self, parent) -> None:
-        frame = ttk.LabelFrame(parent, text='一般參數（最常調整）', padding=10)
-        frame.pack(fill='x', pady=(0, 8))
-        for column in range(4):
-            frame.columnconfigure(column, weight=1 if column in {1, 3} else 0)
+    def _build_universe_settings(self, parent) -> None:
+        frame = ttk.LabelFrame(parent, text='A. 商品清冊建立', padding=9)
+        frame.pack(fill='x', pady=(0, 7))
+        for col in range(4):
+            frame.columnconfigure(col, weight=1 if col in {1, 3} else 0)
+        self._add_setting_row(
+            frame, 0, 'Screener 每頁筆數',
+            self.setting_screener_page_size_var, '只影響建立商品清冊', 0
+        )
+        self._add_setting_row(
+            frame, 0, 'Screener 最大頁數',
+            self.setting_screener_max_pages_var, '限制清冊最多翻頁數', 1
+        )
 
-        rows = [
-            ('行情批次檔數', self.setting_quote_batch_var, '建議 30～80'),
-            ('行情下載執行緒', self.setting_threads_var, '建議 4～8'),
-            ('行情請求逾時', self.setting_yfinance_timeout_var, '建議 10～25 秒'),
-            ('行情批次間隔', self.setting_quote_delay_var, '建議 0.2～0.5 秒'),
-            ('歷史資料單檔間隔', self.setting_action_delay_var, '建議 0.2～0.5 秒'),
-            ('單一項目重試', self.setting_retries_var, '建議 3 次'),
-            ('重試退避秒數', self.setting_backoff_var, '每次逐步增加'),
-            ('爬蟲單檔間隔', self.setting_scraper_delay_var, '建議 ≥ 0.5 秒'),
-            ('爬蟲逾時秒數', self.setting_scraper_timeout_var, '建議 20～40 秒'),
-        ]
-        for index, (label, variable, hint) in enumerate(rows):
-            row = index // 2
-            pair = index % 2
-            column = pair * 2
-            ttk.Label(frame, text=label).grid(
-                row=row, column=column, sticky='e', padx=(4, 5), pady=5
-            )
-            box = ttk.Frame(frame)
-            box.grid(row=row, column=column + 1, sticky='w', pady=5)
-            ttk.Entry(box, textvariable=variable, width=10).pack(side='left')
-            ttk.Label(
-                box,
-                text=hint,
-                foreground=self.colors['muted'],
-            ).pack(side='left', padx=(7, 0))
+    def _build_quote_settings(self, parent) -> None:
+        frame = ttk.LabelFrame(parent, text='B. 商品行情下載', padding=9)
+        frame.pack(fill='x', pady=(0, 7))
+        for col in range(4):
+            frame.columnconfigure(col, weight=1 if col in {1, 3} else 0)
 
-    def _build_advanced_settings(self, parent) -> None:
-        frame = ttk.LabelFrame(parent, text='進階參數', padding=10)
-        frame.pack(fill='x', pady=(0, 8))
-        for column in range(4):
-            frame.columnconfigure(column, weight=1 if column in {1, 3} else 0)
+        self._add_setting_row(
+            frame, 0, '每批商品數', self.setting_quote_batch_var,
+            '建議 60～120', 0
+        )
+        self._add_setting_row(
+            frame, 0, '同時下載執行緒', self.setting_threads_var,
+            '建議 6～10', 1
+        )
+        self._add_setting_row(
+            frame, 1, '請求逾時秒數', self.setting_yfinance_timeout_var,
+            '網路不穩可提高', 0
+        )
+        self._add_setting_row(
+            frame, 1, '批次間隔秒數', self.setting_quote_delay_var,
+            '越低越快、限流風險較高', 1
+        )
 
-        ttk.Label(frame, text='行情期間').grid(
-            row=0, column=0, sticky='e', padx=(4, 5), pady=5
+        ttk.Label(frame, text='行情回看期間').grid(
+            row=2, column=0, sticky='e', padx=(4, 5), pady=4
         )
         ttk.Combobox(
             frame,
             textvariable=self.setting_quote_period_var,
             values=('5d', '1mo', '3mo', '6mo', '1y'),
             state='readonly',
-            width=10,
-        ).grid(row=0, column=1, sticky='w', pady=5)
-
-        ttk.Label(frame, text='行情間隔').grid(
-            row=0, column=2, sticky='e', padx=(4, 5), pady=5
+            width=9,
+        ).grid(row=2, column=1, sticky='w', pady=4)
+        ttk.Label(frame, text='行情資料間隔').grid(
+            row=2, column=2, sticky='e', padx=(4, 5), pady=4
         )
         ttk.Combobox(
             frame,
             textvariable=self.setting_quote_interval_var,
             values=('1d', '5d', '1wk', '1mo'),
             state='readonly',
-            width=10,
-        ).grid(row=0, column=3, sticky='w', pady=5)
+            width=9,
+        ).grid(row=2, column=3, sticky='w', pady=4)
+        ttk.Checkbutton(
+            frame,
+            text='啟用 yfinance 價格修復（需要 SciPy；行情與歷史資料均會使用）',
+            variable=self.setting_repair_var,
+        ).grid(row=3, column=0, columnspan=4, sticky='w', pady=(5, 0))
 
-        ttk.Label(frame, text='歷史公司行動期間').grid(
-            row=1, column=0, sticky='e', padx=(4, 5), pady=5
+    def _build_dividend_settings(self, parent) -> None:
+        frame = ttk.LabelFrame(
+            parent,
+            text='C. 持股股利／股票分割同步',
+            padding=9,
+        )
+        frame.pack(fill='x', pady=(0, 7))
+        for col in range(4):
+            frame.columnconfigure(col, weight=1 if col in {1, 3} else 0)
+
+        ttk.Label(frame, text='兩來源共用抓取範圍').grid(
+            row=0, column=0, sticky='e', padx=(4, 5), pady=4
         )
         ttk.Combobox(
             frame,
             textvariable=self.setting_action_period_var,
-            values=('1y', '2y', '5y', '10y', 'max'),
+            values=('1y', '2y', '3y', '5y', '10y', 'max'),
             state='readonly',
-            width=10,
-        ).grid(row=1, column=1, sticky='w', pady=5)
-
-        ttk.Checkbutton(
+            width=9,
+        ).grid(row=0, column=1, sticky='w', pady=4)
+        ttk.Label(
             frame,
-            text='啟用 yfinance 價格修復（需要 SciPy）',
-            variable=self.setting_repair_var,
-        ).grid(row=1, column=2, columnspan=2, sticky='w', pady=5)
+            text='同步前會清除選定來源舊資料，再依此範圍重建',
+            foreground=self.colors['muted'],
+        ).grid(row=0, column=2, columnspan=2, sticky='w', pady=4)
 
-        ttk.Label(frame, text='Screener 每頁筆數').grid(
-            row=2, column=0, sticky='e', padx=(4, 5), pady=5
+        self._add_setting_row(
+            frame, 1, 'API 每批持股數', self.setting_action_batch_var,
+            'yfinance actions=True', 0
         )
-        ttk.Entry(
-            frame,
-            textvariable=self.setting_screener_page_size_var,
-            width=10,
-        ).grid(row=2, column=1, sticky='w', pady=5)
-
-        ttk.Label(frame, text='Screener 最大頁數').grid(
-            row=2, column=2, sticky='e', padx=(4, 5), pady=5
+        self._add_setting_row(
+            frame, 1, 'API 同時下載執行緒', self.setting_action_threads_var,
+            '建議 4～8', 1
         )
-        ttk.Entry(
-            frame,
-            textvariable=self.setting_screener_max_pages_var,
-            width=10,
-        ).grid(row=2, column=3, sticky='w', pady=5)
+        self._add_setting_row(
+            frame, 2, 'API 批次間隔秒數', self.setting_action_delay_var,
+            '持股少可設 0～0.1', 0
+        )
+        self._add_setting_row(
+            frame, 2, '爬蟲同時抓取檔數', self.setting_scraper_workers_var,
+            '建議 2～4', 1
+        )
+        self._add_setting_row(
+            frame, 3, '爬蟲單檔間隔秒數', self.setting_scraper_delay_var,
+            '建議 0.3～0.8', 0
+        )
+        self._add_setting_row(
+            frame, 3, '爬蟲逾時秒數', self.setting_scraper_timeout_var,
+            '建議 20～40', 1
+        )
+
+    def _build_resilience_settings(self, parent) -> None:
+        frame = ttk.LabelFrame(parent, text='D. 通用重試與容錯', padding=9)
+        frame.pack(fill='x', pady=(0, 7))
+        for col in range(4):
+            frame.columnconfigure(col, weight=1 if col in {1, 3} else 0)
+        self._add_setting_row(
+            frame, 0, '單一項目重試次數', self.setting_retries_var,
+            '行情、API、爬蟲共用', 0
+        )
+        self._add_setting_row(
+            frame, 0, '重試退避秒數', self.setting_backoff_var,
+            '每次失敗逐步增加', 1
+        )
 
     def _build_settings_actions(self, parent) -> None:
         frame = ttk.Frame(parent)
@@ -219,7 +272,6 @@ class SettingsPageMixin:
     def _build_single_test_panel(self, parent) -> None:
         frame = ttk.LabelFrame(parent, text='單筆資料測試（不寫入資料庫）', padding=10)
         frame.pack(fill='both', expand=True, pady=(0, 8))
-
         form = ttk.Frame(frame)
         form.pack(fill='x', pady=(0, 7))
         ttk.Label(form, text='代號／Symbol').grid(row=0, column=0, sticky='e')
@@ -256,21 +308,22 @@ class SettingsPageMixin:
         self.single_test_output.pack(fill='both', expand=True, pady=(8, 0))
 
     def _build_parameter_guidance(self, parent) -> None:
-        frame = ttk.LabelFrame(parent, text='實務調整原則', padding=10)
+        frame = ttk.LabelFrame(parent, text='效能與穩定性建議', padding=10)
         frame.pack(fill='x')
         guidance = (
-            '• 批次大小：越大越快，但一次失敗會影響更多商品。\n'
-            '• 重試與退避：網路不穩時增加；不建議設成無限重試。\n'
-            '• 爬蟲間隔：個人持股建議 0.5～1 秒，降低限流風險。\n'
-            '• 行情期間：只取最新收盤時 1mo／1d 已足夠。\n'
-            '• 歷史期間：第一次可用 max，之後若只需近期可改 5y。\n'
-            '• 單筆測試：正式大量同步前，先驗證一檔代表性商品。'
+            '• 行情：優先增加每批商品數；執行緒超過 10 通常不會等比例加速。\n'
+            '• 股利 API：新版採批次 actions=True；持股 10～50 檔通常 4～8 執行緒即可。\n'
+            '• 爬蟲：建議 2～4 個並行工作，避免短時間對 Yahoo 台灣造成過多請求。\n'
+            '• 抓取範圍：1y／3y／5y 同時套用 API 與爬蟲；max 最完整但最慢。\n'
+            '• 清除重建：股利同步會先清除本次選定來源，再完整重建該範圍。\n'
+            '• 單筆測試：大量同步前先測試 2608.TW、0050.TW 等代表性商品。'
         )
         ttk.Label(
             frame,
             text=guidance,
             justify='left',
             foreground=self.colors['muted'],
+            wraplength=500,
         ).pack(anchor='w')
 
     def _settings_from_form(self) -> RuntimeSettings:
@@ -280,6 +333,8 @@ class SettingsPageMixin:
         )
         return RuntimeSettings(
             dividend_source_mode=source_mode,
+            screener_page_size=int(self.setting_screener_page_size_var.get()),
+            screener_max_pages=int(self.setting_screener_max_pages_var.get()),
             quote_batch_size=int(self.setting_quote_batch_var.get()),
             quote_period=self.setting_quote_period_var.get(),
             quote_interval=self.setting_quote_interval_var.get(),
@@ -288,17 +343,17 @@ class SettingsPageMixin:
             quote_batch_delay_seconds=float(self.setting_quote_delay_var.get()),
             enable_price_repair=bool(self.setting_repair_var.get()),
             action_period=self.setting_action_period_var.get(),
+            action_batch_size=int(self.setting_action_batch_var.get()),
+            action_download_threads=int(self.setting_action_threads_var.get()),
             action_item_delay_seconds=float(self.setting_action_delay_var.get()),
-            item_retries=int(self.setting_retries_var.get()),
-            retry_backoff_seconds=float(self.setting_backoff_var.get()),
+            scraper_workers=int(self.setting_scraper_workers_var.get()),
             scraper_delay_seconds=float(self.setting_scraper_delay_var.get()),
             scraper_timeout_seconds=int(self.setting_scraper_timeout_var.get()),
-            screener_page_size=int(self.setting_screener_page_size_var.get()),
-            screener_max_pages=int(self.setting_screener_max_pages_var.get()),
+            item_retries=int(self.setting_retries_var.get()),
+            retry_backoff_seconds=float(self.setting_backoff_var.get()),
         ).normalized()
 
     def remember_dividend_source(self) -> None:
-        """記住同步列選擇的股利來源，避免下次啟動又恢復預設。"""
         mode = DIVIDEND_SOURCE_LABEL_TO_KEY.get(
             self.dividend_source_var.get(),
             'BOTH',
@@ -312,7 +367,6 @@ class SettingsPageMixin:
         except ValueError:
             messagebox.showerror('設定錯誤', '請確認所有數字欄位均為有效數字。')
             return
-
         self.settings = self.settings_store.save(settings)
         self.sync_service.update_settings(self.settings)
         self.dividend_source_var.set(
@@ -335,6 +389,8 @@ class SettingsPageMixin:
     def _reload_settings_form(self) -> None:
         settings = self.settings
         values = {
+            self.setting_screener_page_size_var: settings.screener_page_size,
+            self.setting_screener_max_pages_var: settings.screener_max_pages,
             self.setting_quote_batch_var: settings.quote_batch_size,
             self.setting_quote_period_var: settings.quote_period,
             self.setting_quote_interval_var: settings.quote_interval,
@@ -342,13 +398,14 @@ class SettingsPageMixin:
             self.setting_yfinance_timeout_var: settings.yfinance_timeout_seconds,
             self.setting_quote_delay_var: settings.quote_batch_delay_seconds,
             self.setting_action_period_var: settings.action_period,
+            self.setting_action_batch_var: settings.action_batch_size,
+            self.setting_action_threads_var: settings.action_download_threads,
             self.setting_action_delay_var: settings.action_item_delay_seconds,
-            self.setting_retries_var: settings.item_retries,
-            self.setting_backoff_var: settings.retry_backoff_seconds,
+            self.setting_scraper_workers_var: settings.scraper_workers,
             self.setting_scraper_delay_var: settings.scraper_delay_seconds,
             self.setting_scraper_timeout_var: settings.scraper_timeout_seconds,
-            self.setting_screener_page_size_var: settings.screener_page_size,
-            self.setting_screener_max_pages_var: settings.screener_max_pages,
+            self.setting_retries_var: settings.item_retries,
+            self.setting_backoff_var: settings.retry_backoff_seconds,
         }
         for variable, value in values.items():
             variable.set(str(value))
@@ -363,7 +420,6 @@ class SettingsPageMixin:
         if not query:
             messagebox.showwarning('缺少代號', '請輸入股票代號或 Yahoo Symbol。')
             return
-
         self._run_background(
             f'正在執行單筆測試：{query}……',
             lambda: self.sync_service.test_single_item(

@@ -62,7 +62,7 @@ class LayoutMixin:
         ).pack(anchor='w')
         ttk.Label(
             title_box,
-            text='持股、損益、歷史 API、Yahoo 台灣公告爬蟲與研究提示整合',
+            text='持股、損益、yfinance 歷史資料、Yahoo 台灣股利政策與研究提示整合',
             style='Header.Subtitle.TLabel',
         ).pack(anchor='w', pady=(2, 0))
 
@@ -80,114 +80,78 @@ class LayoutMixin:
         ttk.Label(bar, textvariable=self.status_var).pack(side='left')
         ttk.Label(
             bar,
-            text='v2.1｜多來源資料僅供研究，不構成投資建議',
+            text='v2.2｜多來源資料僅供研究，不構成投資建議',
             foreground=self.colors['muted'],
         ).pack(side='right')
 
 
     def _build_input_panel(self, parent: ttk.Frame) -> None:
-        """建立偏向鍵盤操作的持股輸入區。"""
-        frame = ttk.LabelFrame(parent, text='持股資料', padding=10)
-        frame.pack(fill='x', pady=(0, 8))
+        """建立單列鍵盤優先的持股輸入區，減少垂直空間占用。"""
+        frame = ttk.LabelFrame(parent, text='快速新增／修改持股', padding=(9, 7))
+        frame.pack(fill='x', pady=(0, 6))
 
-        # Yahoo Symbol 保留為內部識別值，不在輸入畫面顯示，降低視覺負擔。
-        ttk.Label(frame, text='股票代號').grid(
-            row=0, column=0, padx=(3, 2), sticky='e'
-        )
+        fields = [
+            ('股票代號', 'code'),
+            ('股票名稱', 'name'),
+            ('持有股數', 'shares'),
+            ('持有總成本', 'cost'),
+            ('市場', 'market'),
+        ]
+        for index, (label, _key) in enumerate(fields):
+            ttk.Label(frame, text=label).grid(
+                row=0, column=index * 2, padx=(4, 3), sticky='e'
+            )
+
         self.stock_code_entry = ttk.Entry(
-            frame,
-            textvariable=self.stock_code_var,
-            width=12,
+            frame, textvariable=self.stock_code_var, width=11
         )
-        self.stock_code_entry.grid(row=0, column=1, padx=(0, 10))
+        self.stock_code_entry.grid(row=0, column=1, padx=(0, 8))
 
-        ttk.Label(frame, text='股票名稱').grid(
-            row=0, column=2, padx=(3, 2), sticky='e'
-        )
         self.stock_name_entry = ttk.Entry(
-            frame,
-            textvariable=self.stock_name_var,
-            width=24,
-            state='readonly',
+            frame, textvariable=self.stock_name_var, width=20, state='readonly'
         )
-        self.stock_name_entry.grid(row=0, column=3, padx=(0, 10))
+        self.stock_name_entry.grid(row=0, column=3, padx=(0, 8))
 
-        ttk.Label(frame, text='持有股數').grid(
-            row=0, column=4, padx=(3, 2), sticky='e'
-        )
         self.shares_entry = ttk.Entry(
-            frame,
-            textvariable=self.shares_var,
-            width=14,
+            frame, textvariable=self.shares_var, width=12
         )
-        self.shares_entry.grid(row=0, column=5, padx=(0, 10))
+        self.shares_entry.grid(row=0, column=5, padx=(0, 8))
 
-        ttk.Label(frame, text='持有總成本').grid(
-            row=0, column=6, padx=(3, 2), sticky='e'
-        )
         self.total_cost_entry = ttk.Entry(
-            frame,
-            textvariable=self.total_cost_var,
-            width=17,
+            frame, textvariable=self.total_cost_var, width=15
         )
-        self.total_cost_entry.grid(row=0, column=7, padx=(0, 10))
+        self.total_cost_entry.grid(row=0, column=7, padx=(0, 8))
 
-        ttk.Label(frame, text='市場').grid(
-            row=1, column=0, pady=(8, 0), sticky='e'
-        )
         self.market_combo = ttk.Combobox(
             frame,
             textvariable=self.market_var,
             values=list(MARKET_CHOICES.values()),
-            width=37,
+            width=24,
             state='readonly',
         )
-        self.market_combo.grid(
-            row=1,
-            column=1,
-            columnspan=3,
-            pady=(8, 0),
-            sticky='w',
-        )
+        self.market_combo.grid(row=0, column=9, padx=(0, 8))
 
-        ttk.Button(
-            frame,
-            text='解析代號',
-            command=self.resolve_symbol,
-        ).grid(row=1, column=4, pady=(8, 0), padx=4)
-        ttk.Button(
-            frame,
-            text='確認並儲存',
-            command=self.confirm_save_holding,
-            style='Accent.TButton',
-        ).grid(row=1, column=5, pady=(8, 0), padx=4)
-        ttk.Button(
-            frame,
-            text='刪除選取',
-            command=self.delete_selected_holding,
-        ).grid(row=1, column=6, pady=(8, 0), padx=4)
-        ttk.Button(
-            frame,
-            text='清空欄位',
-            command=self.clear_form_and_focus,
-        ).grid(row=1, column=7, pady=(8, 0), padx=4)
+        button_specs = [
+            ('解析', self.resolve_symbol, 'TButton'),
+            ('確認並儲存', self.confirm_save_holding, 'Accent.TButton'),
+            ('刪除選取', self.delete_selected_holding, 'TButton'),
+            ('清空', self.clear_form_and_focus, 'TButton'),
+        ]
+        for offset, (text, command, style_name) in enumerate(button_specs):
+            ttk.Button(
+                frame,
+                text=text,
+                command=command,
+                style=style_name,
+            ).grid(row=0, column=10 + offset, padx=3)
 
+        frame.columnconfigure(14, weight=1)
         ttk.Label(
             frame,
-            text=(
-                '鍵盤流程：股票代號 Enter／Tab → 股數 Enter／Tab '
-                '→ 總成本 Enter → Enter 確認儲存'
-            ),
+            text='Enter／Tab：代號 → 股數 → 總成本 → 確認',
             foreground=self.colors['muted'],
-        ).grid(
-            row=2,
-            column=0,
-            columnspan=8,
-            pady=(8, 0),
-            sticky='w',
-        )
+        ).grid(row=0, column=14, sticky='e', padx=(10, 3))
 
-        # Tab 經過自訂處理時回傳 break，避免焦點在資料尚未解析前跳走。
         self.stock_code_entry.bind('<Return>', self._on_stock_code_commit)
         self.stock_code_entry.bind('<Tab>', self._on_stock_code_commit)
         self.shares_entry.bind('<Return>', self._on_shares_commit)
@@ -198,9 +162,9 @@ class LayoutMixin:
         frame = ttk.LabelFrame(
             parent,
             text='資料來源與同步',
-            padding=8,
+            padding=6,
         )
-        frame.pack(fill='x', pady=(0, 8))
+        frame.pack(fill='x', pady=(0, 6))
 
         first_row = ttk.Frame(frame)
         first_row.pack(fill='x')
@@ -250,7 +214,7 @@ class LayoutMixin:
         ttk.Label(
             second_row,
             text=(
-                '爬蟲適合補入已公告未發放股利；yfinance 適合歷史股利與股票分割。'
+                '同步前會清除選定來源舊資料；抓取範圍與效能參數可在設定頁調整。'
                 '下載過程請查看 LOG。'
             ),
             foreground=self.colors['muted'],
@@ -271,7 +235,7 @@ class LayoutMixin:
         ]
         self.summary_value_labels: list[ttk.Label] = []
         for index, (title, variable, style_name) in enumerate(cards):
-            box = ttk.Frame(frame, padding=9, style='Card.TFrame')
+            box = ttk.Frame(frame, padding=6, style='Card.TFrame')
             box.grid(row=0, column=index, sticky='nsew', padx=7)
             frame.columnconfigure(index, weight=1)
             ttk.Label(
@@ -303,19 +267,44 @@ class LayoutMixin:
         self.main_notebook.add(self.settings_tab, text='抓取參數／單筆測試')
         self.main_notebook.add(self.log_tab, text='下載進度／LOG')
 
-        # 庫存頁左側為表格，右側為不需 API Key 的 AI 手動研究工作區。
-        self.holding_pane = ttk.Panedwindow(
-            holding_tab,
-            orient='horizontal',
+        holding_toolbar = ttk.Frame(holding_tab)
+        holding_toolbar.pack(fill='x', pady=(0, 6))
+        ttk.Label(holding_toolbar, text='搜尋持股：').pack(side='left')
+        self.holding_search_entry = ttk.Entry(
+            holding_toolbar,
+            textvariable=self.holding_search_var,
+            width=24,
         )
-        self.holding_pane.pack(fill='both', expand=True)
-        holding_table_frame = ttk.Frame(self.holding_pane)
-        ai_sidebar_frame = ttk.Frame(self.holding_pane, padding=(8, 0, 0, 0))
-        self.holding_pane.add(holding_table_frame, weight=4)
-        self.holding_pane.add(ai_sidebar_frame, weight=1)
+        self.holding_search_entry.pack(side='left', padx=(0, 8))
+        ttk.Label(
+            holding_toolbar,
+            textvariable=self.holding_count_var,
+            foreground=self.colors['muted'],
+        ).pack(side='left')
+        self.ai_toggle_button = ttk.Button(
+            holding_toolbar,
+            text='隱藏 AI 研究區',
+            command=self._toggle_ai_sidebar,
+        )
+        self.ai_toggle_button.pack(side='right')
+        ttk.Label(
+            holding_toolbar,
+            text='雙擊持股可快速修改股數；Yahoo Symbol 已隱藏但仍保留於資料庫。',
+            foreground=self.colors['muted'],
+        ).pack(side='right', padx=10)
 
-        self._build_holding_table(holding_table_frame)
-        self._build_ai_sidebar(ai_sidebar_frame)
+        # 左側為庫存表，右側 AI 區可收合，讓小螢幕保留更多表格空間。
+        self.holding_pane = ttk.Panedwindow(holding_tab, orient='horizontal')
+        self.holding_pane.pack(fill='both', expand=True)
+        self.holding_table_frame = ttk.Frame(self.holding_pane)
+        self.ai_sidebar_frame = ttk.Frame(
+            self.holding_pane, padding=(8, 0, 0, 0)
+        )
+        self.holding_pane.add(self.holding_table_frame, weight=5)
+        self.holding_pane.add(self.ai_sidebar_frame, weight=2)
+
+        self._build_holding_table(self.holding_table_frame)
+        self._build_ai_sidebar(self.ai_sidebar_frame)
         self._build_dividend_tab(dividend_tab)
         self._build_loaded_data_tab(data_tab)
         self._build_settings_tab(self.settings_tab)
@@ -457,12 +446,15 @@ class LayoutMixin:
             ),
         ))
         widths = {
-            'symbol': 100, 'code': 75, 'name': 140, 'market': 220,
+            'symbol': 1, 'code': 72, 'name': 125, 'market': 155,
             'shares': 90, 'cost': 115, 'avg': 95, 'close': 90,
             'value': 120, 'profit': 115, 'return': 85, 'date': 100,
         }
         self.holding_tree = self._create_tree(
             parent, columns, headings, widths
+        )
+        self.holding_tree.configure(
+            displaycolumns=tuple(column for column in columns if column != 'symbol')
         )
         self.holding_tree.bind(
             '<<TreeviewSelect>>', self.on_holding_selected

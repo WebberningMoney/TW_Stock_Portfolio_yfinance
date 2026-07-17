@@ -68,6 +68,9 @@ class PortfolioApp(
         self.dividend_total_var = tk.StringVar(value='NT$ 0')
 
         self.loaded_search_var = tk.StringVar()
+        self.holding_search_var = tk.StringVar()
+        self.holding_count_var = tk.StringVar(value='')
+        self.ai_sidebar_visible = True
         self.loaded_count_var = tk.StringVar(value='')
         self.log_status_var = tk.StringVar(value='尚未執行下載作業')
         self.ai_selected_var = tk.StringVar(value='請先在庫存表選取一檔持股')
@@ -88,6 +91,9 @@ class PortfolioApp(
         self.loaded_search_var.trace_add(
             'write', lambda *_args: self._render_loaded_data()
         )
+        self.holding_search_var.trace_add(
+            'write', lambda *_args: self.refresh_holding_view()
+        )
         self.refresh_all_views()
 
     def _configure_responsive_window(self) -> None:
@@ -102,6 +108,9 @@ class PortfolioApp(
         x = max((screen_w - width) // 2, 0)
         y = max((screen_h - height) // 2, 0)
         self.root.geometry(f'{width}x{height}+{x}+{y}')
+        # 筆電或窄螢幕預設收合 AI 研究區，優先保留庫存表寬度。
+        if screen_w < 1500 and getattr(self, 'ai_sidebar_visible', False):
+            self.root.after(350, self._toggle_ai_sidebar)
 
     def _bind_global_shortcuts(self) -> None:
         """提供 macOS 與 Windows/Linux 都可使用的高頻快捷鍵。"""

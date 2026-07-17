@@ -225,17 +225,33 @@ class OperationsMixin:
             'BOTH',
         )
         source_label = self.dividend_source_var.get()
-        self._append_log(f'本次股利載入來源：{source_label}')
+        range_code = self.settings.action_period
+        confirmed = messagebox.askokcancel(
+            '確認重建股利資料',
+            f'本次來源：{source_label}\n'
+            f'抓取範圍：最近 {range_code}\n\n'
+            '系統會先清除所選來源的既有股利／分割資料，'
+            '再依目前參數完整重建。下載失敗的項目可能暫時沒有資料。\n\n'
+            '是否繼續？',
+            default='ok',
+        )
+        if not confirmed:
+            return
+
+        self._append_log(
+            f'本次股利載入來源：{source_label}；抓取範圍：{range_code}'
+        )
         self._run_background(
-            f'正在更新持股股利資料（{source_label}）……',
+            f'正在重建持股股利資料（{source_label}／{range_code}）……',
             lambda: self.sync_service.sync_holding_actions(
                 source_mode=source_mode,
                 progress=self._progress,
             ),
             lambda result: self._after_sync(
-                f'yfinance 歷史股利／分割 {result.history_action_count} 筆；'
-                f'Yahoo 台灣公告股利 {result.announced_dividend_count} 筆；'
-                f'最終失敗項目 {result.failed_count} 個'
+                f'已清除舊資料 {result.cleared_count} 筆；'
+                f'yfinance 股利／分割 {result.history_action_count} 筆；'
+                f'Yahoo 台灣股利政策 {result.announced_dividend_count} 筆；'
+                f'範圍 {result.range_code}；失敗 {result.failed_count} 個'
             ),
         )
 

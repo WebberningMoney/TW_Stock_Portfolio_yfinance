@@ -8,6 +8,10 @@ def test_runtime_settings_apply_safe_bounds() -> None:
         dividend_source_mode='invalid',
         quote_batch_size=999,
         download_threads=0,
+        action_period='invalid',
+        action_batch_size=999,
+        action_download_threads=0,
+        scraper_workers=99,
         item_retries=99,
         retry_backoff_seconds=-1,
         scraper_delay_seconds=-5,
@@ -17,11 +21,20 @@ def test_runtime_settings_apply_safe_bounds() -> None:
     ).normalized()
 
     assert settings.dividend_source_mode == 'BOTH'
-    assert settings.quote_batch_size == 200
+    assert settings.quote_batch_size == 250
     assert settings.download_threads == 1
+    assert settings.action_period == '5y'
+    assert settings.action_batch_size == 100
+    assert settings.action_download_threads == 1
+    assert settings.scraper_workers == 6
     assert settings.item_retries == 8
     assert settings.retry_backoff_seconds == 0
     assert settings.scraper_delay_seconds == 0
     assert settings.scraper_timeout_seconds == 5
     assert settings.screener_page_size == 250
     assert settings.screener_max_pages == 1
+
+
+def test_runtime_settings_accept_three_year_dividend_range() -> None:
+    settings = RuntimeSettings(action_period='3y').normalized()
+    assert settings.action_period == '3y'

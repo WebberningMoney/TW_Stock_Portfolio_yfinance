@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, timedelta
 import csv
 import html
 import importlib.util
@@ -833,22 +834,22 @@ class YFinanceClient:
             if self.settings.quote_batch_delay_seconds > 0:
                 time.sleep(self.settings.quote_batch_delay_seconds)
 
-        # 批次下載失敗的商品逐檔重試，最多三次。
+        # 批次下載失敗的商品以小型執行緒池逐檔重試。
         retry_symbols = sorted(
             symbol for symbol in failed_candidates
             if symbol not in quotes_by_symbol
         )
         final_failed: list[str] = []
-        for item_index, symbol in enumerate(retry_symbols, start=1):
-            success = False
+
+        def retry_quote(symbol: str) -> tuple[str, MarketQuote | None, str]:
             last_error = '沒有有效收盤價'
             for attempt in range(1, self.settings.item_retries + 1):
                 _emit(
                     progress,
-                    f'行情重試 {item_index}/{len(retry_symbols)}：{symbol} '
-                    f'第 {attempt}/{self.settings.item_retries} 次',
-                    item_index,
-                    len(retry_symbols),
+                    f'行情重試：{symbol} 第 {attempt}/'
+                    f'{self.settings.item_retries} 次',
+                    None,
+                    None,
                 )
                 try:
                     data = yf.download(
@@ -868,35 +869,40 @@ class YFinanceClient:
                     quote = parse_quote(symbol, data)
                     if quote is None:
                         raise YFinanceApiError('沒有有效收盤價')
-                    quotes_by_symbol[symbol] = quote
-                    success = True
-                    _emit(
-                        progress,
-                        f'行情重試成功：{symbol}',
-                        item_index,
-                        len(retry_symbols),
-                    )
-                    break
+                    return symbol, quote, ''
                 except Exception as exc:
                     last_error = str(exc)
-                    _emit(
-                        progress,
-                        f'行情 {symbol} 第 {attempt} 次失敗：{last_error}',
-                        item_index,
-                        len(retry_symbols),
-                    )
                     if attempt < self.settings.item_retries:
                         time.sleep(self.settings.retry_backoff_seconds * attempt)
+            return symbol, None, last_error
 
-            if not success:
-                final_failed.append(symbol)
-                _emit(
-                    progress,
-                    f'行情最終失敗：{symbol}；重試 {self.settings.item_retries} 次後'
-                    f'仍無法取得（{last_error}）',
-                    item_index,
-                    len(retry_symbols),
-                )
+        if retry_symbols:
+            retry_workers = min(4, self.settings.download_threads, len(retry_symbols))
+            completed = 0
+            with ThreadPoolExecutor(max_workers=max(retry_workers, 1)) as executor:
+                futures = {
+                    executor.submit(retry_quote, symbol): symbol
+                    for symbol in retry_symbols
+                }
+                for future in as_completed(futures):
+                    completed += 1
+                    symbol, quote, error = future.result()
+                    if quote is not None:
+                        quotes_by_symbol[symbol] = quote
+                        _emit(
+                            progress,
+                            f'行情重試成功：{symbol}',
+                            completed,
+                            len(retry_symbols),
+                        )
+                    else:
+                        final_failed.append(symbol)
+                        _emit(
+                            progress,
+                            f'行情最終失敗：{symbol}（{error}）',
+                            completed,
+                            len(retry_symbols),
+                        )
 
         quotes = [quotes_by_symbol[symbol] for symbol in sorted(quotes_by_symbol)]
         _emit(
@@ -908,30 +914,36 @@ class YFinanceClient:
         )
         return quotes, final_failed
 
-    def fetch_actions(
-        self,
-        instrument: Instrument,
-    ) -> list[CorporateAction]:
-        """取得 Yahoo 可用的完整歷史股利與股票分割。"""
-        try:
-            history = yf.Ticker(instrument.symbol).history(
-                period=self.settings.action_period,
-                interval='1d',
-                auto_adjust=False,
-                actions=True,
-                repair=self.repair_enabled,
-                raise_errors=False,
-            )
-        except Exception as exc:
-            raise YFinanceApiError(
-                f'{instrument.symbol} 股利／分割資料下載失敗：{exc}'
-            ) from exc
+    def _action_history_kwargs(self) -> dict[str, object]:
+        """建立 yfinance history/download 的期間參數。
 
-        if history is None or history.empty:
+        yfinance 原生 period 不支援 3y，因此 3y 使用明確 start/end；
+        其他官方支援期間沿用 period，可降低日期邊界差異。
+        """
+        period = self.settings.action_period
+        if period == '3y':
+            today = date.today()
+            try:
+                start = today.replace(year=today.year - 3)
+            except ValueError:  # 2/29
+                start = today.replace(year=today.year - 3, day=28)
+            return {
+                'start': start.isoformat(),
+                'end': (today + timedelta(days=1)).isoformat(),
+            }
+        return {'period': period}
+
+    @staticmethod
+    def _parse_actions_frame(
+        instrument: Instrument,
+        frame: pd.DataFrame,
+    ) -> list[CorporateAction]:
+        """將單一商品的行情 DataFrame 轉成股利／股票分割事件。"""
+        if frame is None or frame.empty:
             return []
 
         actions: list[CorporateAction] = []
-        for timestamp, row in history.iterrows():
+        for timestamp, row in frame.iterrows():
             action_date = iso_date(timestamp)
             dividend = float(row.get('Dividends') or 0.0)
             split = float(row.get('Stock Splits') or 0.0)
@@ -945,6 +957,7 @@ class YFinanceClient:
                         action_date=action_date,
                         action_type='DIVIDEND',
                         value=dividend,
+                        source='yfinance',
                     )
                 )
             if split > 0:
@@ -956,7 +969,122 @@ class YFinanceClient:
                         action_date=action_date,
                         action_type='SPLIT',
                         value=split,
+                        source='yfinance',
                     )
                 )
-
         return actions
+
+    def download_actions(
+        self,
+        instruments: list[Instrument],
+        progress: ProgressCallback | None = None,
+    ) -> tuple[dict[str, list[CorporateAction]], list[str]]:
+        """批次下載持股的股利與股票分割，失敗項目再逐檔重試。
+
+        相較逐檔 Ticker.history，批次 download(actions=True) 可共用連線與
+        執行緒，持股較多時會明顯縮短等待時間。沒有股利／分割但行情存在
+        的商品視為成功，回傳空清單。
+        """
+        by_symbol = {item.symbol: item for item in instruments if item.symbol}
+        symbols = sorted(by_symbol)
+        results: dict[str, list[CorporateAction]] = {}
+        failed_candidates: set[str] = set()
+        batches = list(chunks(symbols, self.settings.action_batch_size))
+        history_kwargs = self._action_history_kwargs()
+
+        for batch_index, batch in enumerate(batches, start=1):
+            _emit(
+                progress,
+                f'[API／歷史] 批次 {batch_index}/{len(batches)}：{len(batch)} 檔',
+                batch_index,
+                len(batches) or 1,
+            )
+            try:
+                data = yf.download(
+                    tickers=batch,
+                    interval='1d',
+                    group_by='ticker',
+                    auto_adjust=False,
+                    actions=True,
+                    threads=min(
+                        self.settings.action_download_threads,
+                        len(batch),
+                    ),
+                    repair=self.repair_enabled,
+                    progress=False,
+                    keepna=False,
+                    multi_level_index=True,
+                    timeout=self.settings.yfinance_timeout_seconds,
+                    **history_kwargs,
+                )
+            except Exception as exc:
+                failed_candidates.update(batch)
+                _emit(
+                    progress,
+                    f'[API／歷史] 第 {batch_index} 批失敗，改逐檔重試：{exc}',
+                    batch_index,
+                    len(batches) or 1,
+                )
+                continue
+
+            for symbol in batch:
+                frame = self._extract_symbol_frame(data, symbol)
+                # Close 存在即可判定 Yahoo 有回應；股利欄全為 0 仍是成功。
+                if frame.empty or 'Close' not in frame.columns:
+                    failed_candidates.add(symbol)
+                    continue
+                results[symbol] = self._parse_actions_frame(
+                    by_symbol[symbol], frame
+                )
+                failed_candidates.discard(symbol)
+
+            if self.settings.action_item_delay_seconds > 0:
+                time.sleep(self.settings.action_item_delay_seconds)
+
+        final_failed: list[str] = []
+        retry_symbols = sorted(
+            symbol for symbol in failed_candidates if symbol not in results
+        )
+        for item_index, symbol in enumerate(retry_symbols, start=1):
+            instrument = by_symbol[symbol]
+            try:
+                results[symbol] = self.fetch_actions(instrument)
+                _emit(
+                    progress,
+                    f'[API／歷史] 逐檔重試成功：{symbol}',
+                    item_index,
+                    len(retry_symbols) or 1,
+                )
+            except Exception as exc:
+                final_failed.append(symbol)
+                _emit(
+                    progress,
+                    f'[API／歷史] 最終失敗：{symbol}；{exc}',
+                    item_index,
+                    len(retry_symbols) or 1,
+                )
+        return results, final_failed
+
+    def fetch_actions(
+        self,
+        instrument: Instrument,
+    ) -> list[CorporateAction]:
+        """取得設定範圍內的歷史股利與股票分割。"""
+        try:
+            history = yf.Ticker(instrument.symbol).history(
+                interval='1d',
+                auto_adjust=False,
+                actions=True,
+                repair=self.repair_enabled,
+                raise_errors=False,
+                **self._action_history_kwargs(),
+            )
+        except Exception as exc:
+            raise YFinanceApiError(
+                f'{instrument.symbol} 股利／分割資料下載失敗：{exc}'
+            ) from exc
+
+        if history is None or history.empty:
+            return []
+        return self._parse_actions_frame(instrument, history)
+

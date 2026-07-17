@@ -142,7 +142,7 @@ class LoadedDataPageMixin:
         headings = dict(zip(
             columns,
             (
-                '除息／事件日', '現金發放日', '所屬期間', 'Yahoo Symbol',
+                '除息日／分割事件日', '現金股利發放日', '所屬期間', 'Yahoo Symbol',
                 '代號', '名稱', '類型', '數值', '公告狀態', '來源',
             ),
         ))
@@ -263,7 +263,7 @@ class LoadedDataPageMixin:
         action_count = 0
         source_labels = {
             'yfinance': 'API／yfinance 歷史',
-            'yahoo_tw_scraper': '爬蟲／Yahoo 台灣已公告',
+            'yahoo_tw_scraper': '爬蟲／Yahoo 台灣股利政策',
             'projection': '歷史模式估算',
         }
         status_labels = {

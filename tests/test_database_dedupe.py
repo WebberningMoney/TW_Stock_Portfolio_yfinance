@@ -52,8 +52,35 @@ class DatabaseDedupeTests(unittest.TestCase):
             self.assertEqual(actions[0].source, 'yahoo_tw_scraper')
             self.assertEqual(actions[0].period, '2026Q2')
             self.assertEqual(actions[0].payment_date, '2026-08-10')
-            self.assertIn('保留 爬蟲／Yahoo 台灣已公告', messages[0])
+            self.assertIn('保留 爬蟲／Yahoo 台灣股利政策', messages[0])
 
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_clear_actions_for_selected_sources(tmp_path):
+    database = Database(tmp_path / 'portfolio.db')
+    database.initialize()
+    actions = [
+        CorporateAction(
+            symbol='0050.TW', stock_code='0050', stock_name='元大台灣50',
+            action_date='2025-01-01', action_type='DIVIDEND', value=1.0,
+            source='yfinance',
+        ),
+        CorporateAction(
+            symbol='0050.TW', stock_code='0050', stock_name='元大台灣50',
+            action_date='2026-01-01', action_type='DIVIDEND', value=2.0,
+            source='yahoo_tw_scraper',
+        ),
+    ]
+    database.replace_actions_for_symbol('0050.TW', [actions[0]])
+    database.replace_scraped_dividends_for_symbol('0050.TW', [actions[1]])
+
+    deleted = database.clear_actions_for_symbols(
+        ['0050.TW'], {'yfinance'}
+    )
+    assert deleted == 1
+    remaining = database.list_actions()
+    assert len(remaining) == 1
+    assert remaining[0].source == 'yahoo_tw_scraper'

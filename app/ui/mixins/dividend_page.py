@@ -93,7 +93,7 @@ class DividendPageMixin:
                 style=style_name,
             ).pack(pady=(4, 0))
 
-        # v2.1：改為左右切版。左側專注圖表，右側完整呈現摘要與明細。
+        # v2.2：維持左右切版。左側專注圖表，右側完整呈現摘要與明細。
         pane = ttk.Panedwindow(parent, orient='horizontal')
         self.dividend_pane = pane
         pane.pack(fill='both', expand=True)

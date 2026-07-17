@@ -255,6 +255,25 @@ class AiWorkspaceMixin:
         )
         webbrowser.open_new_tab(url)
 
+    def _toggle_ai_sidebar(self) -> None:
+        """收合或顯示右側 AI 研究區，讓庫存表可使用完整寬度。"""
+        pane = getattr(self, 'holding_pane', None)
+        sidebar = getattr(self, 'ai_sidebar_frame', None)
+        if pane is None or sidebar is None:
+            return
+        try:
+            if self.ai_sidebar_visible:
+                pane.forget(sidebar)
+                self.ai_sidebar_visible = False
+                self.ai_toggle_button.configure(text='顯示 AI 研究區')
+            else:
+                pane.add(sidebar, weight=2)
+                self.ai_sidebar_visible = True
+                self.ai_toggle_button.configure(text='隱藏 AI 研究區')
+                self.root.after_idle(self._set_default_holding_sash)
+        except tk.TclError:
+            return
+
     def _set_default_holding_sash(self) -> None:
         """預設為 AI 工作區保留約 360px 寬度。"""
         pane = getattr(self, 'holding_pane', None)
@@ -264,7 +283,9 @@ class AiWorkspaceMixin:
         width = pane.winfo_width()
         if width < 900:
             return
+        if not getattr(self, 'ai_sidebar_visible', True):
+            return
         try:
-            pane.sashpos(0, max(width - 380, int(width * 0.68)))
+            pane.sashpos(0, max(width - 410, int(width * 0.72)))
         except tk.TclError:
             pass

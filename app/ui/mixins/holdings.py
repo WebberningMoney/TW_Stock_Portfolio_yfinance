@@ -382,6 +382,21 @@ class HoldingsMixin:
         self._holding_view_by_symbol = {item.symbol: item for item in views}
         summary = summarize_portfolio(views)
 
+        query = self.holding_search_var.get().strip().casefold()
+        visible_views = views
+        if query:
+            visible_views = [
+                item for item in views
+                if query in item.symbol.casefold()
+                or query in item.stock_code.casefold()
+                or query in item.stock_name.casefold()
+                or query in self._market_label(item.market_segment).casefold()
+            ]
+        if hasattr(self, 'holding_count_var'):
+            self.holding_count_var.set(
+                f'顯示 {len(visible_views)}／{len(views)} 檔'
+            )
+
         self.holding_tree.tag_configure(
             'positive', foreground=self.colors['positive']
         )
@@ -396,7 +411,7 @@ class HoldingsMixin:
             self.holding_tree.delete(item)
 
         selected_item_id = None
-        for view in views:
+        for view in visible_views:
             row_tag = (
                 'positive' if view.profit > 0
                 else 'negative' if view.profit < 0

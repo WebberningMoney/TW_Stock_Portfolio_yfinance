@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import time
 
@@ -27,6 +28,8 @@ class ActionSyncResult:
     history_action_count: int
     announced_dividend_count: int
     failed_count: int
+    cleared_count: int = 0
+    range_code: str = '5y'
 
 
 @dataclass(slots=True)
@@ -226,38 +229,28 @@ class SyncService:
         source_mode: str = 'BOTH',
         progress: ProgressCallback | None = None,
     ) -> ActionSyncResult:
-        """依選擇來源更新已登錄持股的股利資料。"""
+        """清除選定來源舊資料後，依設定範圍重建持股股利／分割。"""
         mode = str(source_mode or 'BOTH').upper()
         if mode not in VALID_ACTION_SOURCE_MODES:
             raise ValueError(f'不支援的股利來源模式：{source_mode}')
 
         holdings = self.database.list_holdings()
-        history_action_count = 0
-        announced_dividend_count = 0
         failed_items: list[str] = []
+        instruments: list[Instrument] = []
         total = len(holdings)
 
         if progress:
             progress(
                 f'股利資料來源：{self._source_mode_label(mode)}；'
-                f'共 {total} 檔持股',
+                f'抓取範圍：{self.settings.action_period}；共 {total} 檔持股',
                 0,
                 total or 1,
             )
 
+        # 先確認所有持股都有可用 Instrument，避免清除後才發現代號無法解析。
         for index, holding in enumerate(holdings, start=1):
-            if progress:
-                progress(
-                    f'處理持股 {index}/{total}：'
-                    f'{holding.yahoo_symbol} {holding.stock_name}',
-                    index,
-                    total,
-                )
-
-            instrument = self.database.get_instrument(
-                holding.yahoo_symbol
-            )
-            if not instrument:
+            instrument = self.database.get_instrument(holding.yahoo_symbol)
+            if instrument is None:
                 try:
                     instrument = self._resolve_holding_instrument_with_retry(
                         holding.stock_code,
@@ -266,130 +259,154 @@ class SyncService:
                         progress,
                     )
                 except Exception as exc:
-                    failed_items.append(
-                        f'{holding.yahoo_symbol} 商品解析：{exc}'
-                    )
+                    failed_items.append(f'{holding.yahoo_symbol} 商品解析：{exc}')
                     if progress:
                         progress(
                             f'最終失敗：{holding.yahoo_symbol} 商品解析；{exc}',
                             index,
-                            total,
+                            total or 1,
                         )
                     continue
+            instruments.append(instrument)
 
-            if mode in {'BOTH', 'YFINANCE'}:
-                try:
-                    actions = self._fetch_yfinance_actions_with_retry(
-                        instrument,
-                        progress,
-                    )
-                    self.database.replace_actions_for_symbol(
-                        instrument.symbol,
-                        actions,
-                    )
-                    history_action_count += len(actions)
-                    if progress:
-                        progress(
-                            f'[API／歷史] 完成：{instrument.symbol} '
-                            f'{len(actions)} 筆股利／分割',
-                            index,
-                            total,
-                        )
-                except Exception as exc:
-                    failed_items.append(
-                        f'{instrument.symbol} API／歷史股利／分割：{exc}'
-                    )
-                    if progress:
-                        progress(
-                            f'[API／歷史] 最終失敗：{instrument.symbol}；{exc}',
-                            index,
-                            total,
-                        )
-            elif progress:
-                progress(
-                    f'[API／歷史] 略過：本次選擇僅使用爬蟲 '
-                    f'({instrument.symbol})',
-                    index,
-                    total,
+        selected_sources: set[str] = set()
+        if mode in {'BOTH', 'YFINANCE'}:
+            selected_sources.add('yfinance')
+        if mode in {'BOTH', 'SCRAPER'}:
+            selected_sources.add('yahoo_tw_scraper')
+
+        cleared_count = self.database.clear_actions_for_symbols(
+            [item.symbol for item in instruments],
+            selected_sources,
+        )
+        if progress:
+            progress(
+                f'[資料重建] 已先清除選定來源舊資料 {cleared_count} 筆；'
+                f'接著依 {self.settings.action_period} 範圍重新載入',
+                0,
+                max(len(instruments), 1),
+            )
+
+        history_action_count = 0
+        announced_dividend_count = 0
+
+        # yfinance 支援批次 actions=True，比逐檔 Ticker.history 更快。
+        if mode in {'BOTH', 'YFINANCE'} and instruments:
+            action_map, api_failed = self.client.download_actions(
+                instruments,
+                progress,
+            )
+            for instrument in instruments:
+                if instrument.symbol not in action_map:
+                    continue
+                actions = action_map[instrument.symbol]
+                self.database.replace_actions_for_symbol(
+                    instrument.symbol,
+                    actions,
                 )
-
-            if mode in {'BOTH', 'SCRAPER'}:
-                try:
-                    announced = self.dividend_scraper.fetch_dividends(
-                        instrument,
-                        progress,
+                history_action_count += len(actions)
+                if progress:
+                    progress(
+                        f'[API／歷史] 完成：{instrument.symbol} '
+                        f'{len(actions)} 筆股利／分割',
+                        None,
+                        None,
                     )
+            for symbol in api_failed:
+                failed_items.append(f'{symbol} API／歷史股利／分割下載失敗')
+        elif progress:
+            progress('[API／歷史] 本次未選取，略過', None, None)
+
+        # Yahoo 台灣公告頁以小型執行緒池並行；每個執行緒使用獨立 Session。
+        if mode in {'BOTH', 'SCRAPER'} and instruments:
+            completed = 0
+            with ThreadPoolExecutor(
+                max_workers=min(self.settings.scraper_workers, len(instruments))
+            ) as executor:
+                futures = {
+                    executor.submit(
+                        self.dividend_scraper.fetch_dividends,
+                        instrument,
+                        (
+                            (lambda message, _current=None, _total=None: progress(
+                                message, None, None
+                            ))
+                            if progress
+                            else None
+                        ),
+                    ): instrument
+                    for instrument in instruments
+                }
+                for future in as_completed(futures):
+                    instrument = futures[future]
+                    completed += 1
+                    try:
+                        announced = future.result()
+                    except Exception as exc:
+                        failed_items.append(
+                            f'{instrument.symbol} Yahoo 台灣公告爬蟲：{exc}'
+                        )
+                        if progress:
+                            progress(
+                                f'[爬蟲／Yahoo 台灣] 最終失敗：'
+                                f'{instrument.symbol}；{exc}',
+                                completed,
+                                len(instruments),
+                            )
+                        continue
+
                     self.database.replace_scraped_dividends_for_symbol(
                         instrument.symbol,
                         announced,
                     )
                     announced_dividend_count += len(announced)
-                    if progress:
-                        future_count = sum(
-                            item.announcement_status in {
-                                'ANNOUNCED', 'EX_DATE_PASSED'
-                            }
-                            for item in announced
-                        )
-                        progress(
-                            f'[爬蟲／Yahoo 台灣已公告] 完成：{instrument.symbol} '
-                            f'{len(announced)} 筆，其中尚未發放 {future_count} 筆',
-                            index,
-                            total,
-                        )
-                except Exception as exc:
-                    failed_items.append(
-                        f'{instrument.symbol} 爬蟲／Yahoo 台灣已公告：{exc}'
+                    future_count = sum(
+                        item.announcement_status in {
+                            'ANNOUNCED', 'EX_DATE_PASSED'
+                        }
+                        for item in announced
                     )
                     if progress:
                         progress(
-                            f'[爬蟲／Yahoo 台灣已公告] 最終失敗：'
-                            f'{instrument.symbol}；{exc}',
-                            index,
-                            total,
+                            f'[爬蟲／Yahoo 台灣] 完成：{instrument.symbol} '
+                            f'{len(announced)} 筆，其中尚未發放 {future_count} 筆',
+                            completed,
+                            len(instruments),
                         )
-            elif progress:
-                progress(
-                    f'[爬蟲／Yahoo 台灣已公告] 略過：本次選擇僅使用 '
-                    f'yfinance API ({instrument.symbol})',
-                    index,
-                    total,
-                )
+        elif progress:
+            progress('[爬蟲／Yahoo 台灣] 本次未選取，略過', None, None)
 
-            # 無論本次使用哪個來源，都整理資料庫中既有的跨來源重複事件。
+        # 兩來源完成後再統一整合重複事件。
+        for index, instrument in enumerate(instruments, start=1):
             merge_messages = self.database.consolidate_duplicate_actions_for_symbol(
                 instrument.symbol
             )
             for message in merge_messages:
                 if progress:
-                    progress(
-                        f'[資料整合] {message}',
-                        index,
-                        total,
-                    )
-
-            if self.settings.action_item_delay_seconds > 0:
-                time.sleep(self.settings.action_item_delay_seconds)
+                    progress(f'[資料整合] {message}', index, len(instruments))
 
         status = 'SUCCESS' if not failed_items else 'PARTIAL'
         self.database.add_sync_log(
             'DIVIDEND_SPLIT',
             status,
-            f'source_mode={mode}, history_actions={history_action_count}, '
+            f'source_mode={mode}, range={self.settings.action_period}, '
+            f'cleared={cleared_count}, history_actions={history_action_count}, '
             f'announced_dividends={announced_dividend_count}, '
             f'failed_items={failed_items[:50]}',
         )
         if progress and failed_items:
             progress(
                 '重試後仍失敗的項目：' + '｜'.join(failed_items[:20]),
-                total,
-                total or 1,
+                len(instruments),
+                len(instruments) or 1,
             )
         return ActionSyncResult(
             source_mode=mode,
             history_action_count=history_action_count,
             announced_dividend_count=announced_dividend_count,
             failed_count=len(failed_items),
+            cleared_count=cleared_count,
+            range_code=self.settings.action_period,
         )
 
     def test_single_item(
@@ -433,7 +450,7 @@ class SyncService:
             splits = [a for a in actions if a.action_type == 'SPLIT']
             last_date = max((a.action_date for a in actions), default='-')
             result.history_summary = (
-                f'yfinance 歷史：股利 {len(dividends)} 筆、'
+                f'yfinance（{self.settings.action_period}）：股利 {len(dividends)} 筆、'
                 f'分割 {len(splits)} 筆，最近事件 {last_date}'
             )
 
@@ -449,7 +466,7 @@ class SyncService:
                 default=None,
             )
             result.scraper_summary = (
-                f'Yahoo 台灣公告：{len(announced)} 筆'
+                f'Yahoo 台灣股利政策（{self.settings.action_period}）：{len(announced)} 筆'
                 + (
                     f'，最新 {latest.period or "-"}／'
                     f'{latest.action_date}／每股 {latest.value:g}'
@@ -485,9 +502,9 @@ class SyncService:
     @staticmethod
     def _source_mode_label(mode: str) -> str:
         return {
-            'BOTH': '兩者（yfinance 歷史＋Yahoo 台灣公告）',
+            'BOTH': '兩者（yfinance 歷史＋Yahoo 台灣股利政策）',
             'YFINANCE': '僅 yfinance API 歷史資料',
-            'SCRAPER': '僅 Yahoo 台灣公告爬蟲',
+            'SCRAPER': '僅 Yahoo 台灣股利政策爬蟲',
         }.get(mode, mode)
 
     @staticmethod
@@ -496,5 +513,5 @@ class SyncService:
             'ALL': '全部測試',
             'QUOTE': '行情',
             'YFINANCE': 'yfinance 歷史股利／分割',
-            'SCRAPER': 'Yahoo 台灣公告股利爬蟲',
+            'SCRAPER': 'Yahoo 台灣股利政策爬蟲',
         }.get(mode, mode)

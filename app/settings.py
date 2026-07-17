@@ -1,7 +1,7 @@
 """執行階段抓取參數與本機設定保存。
 
-設定與程式碼分離，讓一般使用者可在 GUI 調整批次大小、重試、間隔等參數，
-同時保留合理邊界，避免誤設造成 Yahoo 限流或下載過慢。
+設定依資料流程分組：商品清冊、行情、股利／分割、Yahoo 台灣公告爬蟲與
+通用容錯。GUI 可調整後立即套用，並保存至 data/app_settings.json。
 """
 
 from __future__ import annotations
@@ -14,6 +14,9 @@ from typing import Any
 from app.config import SETTINGS_PATH
 
 
+VALID_DIVIDEND_RANGES = {'1y', '2y', '3y', '5y', '10y', 'max'}
+
+
 @dataclass(slots=True)
 class RuntimeSettings:
     """可由 GUI 調整的抓取參數。"""
@@ -21,39 +24,49 @@ class RuntimeSettings:
     # 預設股利更新來源
     dividend_source_mode: str = 'BOTH'
 
+    # 商品清冊
+    screener_page_size: int = 250
+    screener_max_pages: int = 30
+
     # 行情下載
-    quote_batch_size: int = 50
+    quote_batch_size: int = 100
     quote_period: str = '1mo'
     quote_interval: str = '1d'
     download_threads: int = 8
     yfinance_timeout_seconds: int = 15
-    quote_batch_delay_seconds: float = 0.20
+    quote_batch_delay_seconds: float = 0.05
     enable_price_repair: bool = True
 
-    # 歷史股利／分割
-    action_period: str = 'max'
-    action_item_delay_seconds: float = 0.20
+    # 股利／股票分割：同一範圍同時套用於 yfinance 與 Yahoo 台灣爬蟲
+    action_period: str = '5y'
+    action_batch_size: int = 30
+    action_download_threads: int = 6
+    action_item_delay_seconds: float = 0.05
+
+    # Yahoo 台灣股利頁爬蟲
+    scraper_workers: int = 3
+    scraper_delay_seconds: float = 0.35
+    scraper_timeout_seconds: int = 25
 
     # 通用容錯
     item_retries: int = 3
     retry_backoff_seconds: float = 1.0
-
-    # Yahoo 台灣股利頁爬蟲
-    scraper_delay_seconds: float = 0.50
-    scraper_timeout_seconds: int = 25
-
-    # 商品清冊
-    screener_page_size: int = 250
-    screener_max_pages: int = 30
 
     def normalized(self) -> 'RuntimeSettings':
         """回傳套用安全邊界後的設定副本。"""
         source_mode = str(self.dividend_source_mode or 'BOTH').upper()
         if source_mode not in {'BOTH', 'YFINANCE', 'SCRAPER'}:
             source_mode = 'BOTH'
+
+        action_period = str(self.action_period or '5y').lower()
+        if action_period not in VALID_DIVIDEND_RANGES:
+            action_period = '5y'
+
         return RuntimeSettings(
             dividend_source_mode=source_mode,
-            quote_batch_size=min(max(int(self.quote_batch_size), 1), 200),
+            screener_page_size=min(max(int(self.screener_page_size), 25), 250),
+            screener_max_pages=min(max(int(self.screener_max_pages), 1), 100),
+            quote_batch_size=min(max(int(self.quote_batch_size), 1), 250),
             quote_period=str(self.quote_period or '1mo'),
             quote_interval=str(self.quote_interval or '1d'),
             download_threads=min(max(int(self.download_threads), 1), 16),
@@ -64,31 +77,30 @@ class RuntimeSettings:
                 max(float(self.quote_batch_delay_seconds), 0.0), 10.0
             ),
             enable_price_repair=bool(self.enable_price_repair),
-            action_period=str(self.action_period or 'max'),
+            action_period=action_period,
+            action_batch_size=min(max(int(self.action_batch_size), 1), 100),
+            action_download_threads=min(
+                max(int(self.action_download_threads), 1), 12
+            ),
             action_item_delay_seconds=min(
                 max(float(self.action_item_delay_seconds), 0.0), 10.0
             ),
-            item_retries=min(max(int(self.item_retries), 1), 8),
-            retry_backoff_seconds=min(
-                max(float(self.retry_backoff_seconds), 0.0), 30.0
-            ),
+            scraper_workers=min(max(int(self.scraper_workers), 1), 6),
             scraper_delay_seconds=min(
                 max(float(self.scraper_delay_seconds), 0.0), 10.0
             ),
             scraper_timeout_seconds=min(
                 max(int(self.scraper_timeout_seconds), 5), 120
             ),
-            screener_page_size=min(
-                max(int(self.screener_page_size), 25), 250
-            ),
-            screener_max_pages=min(
-                max(int(self.screener_max_pages), 1), 100
+            item_retries=min(max(int(self.item_retries), 1), 8),
+            retry_backoff_seconds=min(
+                max(float(self.retry_backoff_seconds), 0.0), 30.0
             ),
         )
 
 
 class SettingsStore:
-    """以 JSON 保存執行階段設定。"""
+    """以 JSON 保存執行階段設定，並相容舊版欄位。"""
 
     def __init__(self, path: Path = SETTINGS_PATH) -> None:
         self.path = path
@@ -106,6 +118,7 @@ class SettingsStore:
         if not isinstance(payload, dict):
             return defaults
 
+        # 舊版 action_period=max 可直接沿用；新欄位缺少時套用新預設。
         valid_names = {field.name for field in fields(RuntimeSettings)}
         values: dict[str, Any] = {
             key: value for key, value in payload.items() if key in valid_names

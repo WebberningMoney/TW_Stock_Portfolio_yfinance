@@ -7,8 +7,8 @@
 
 from pathlib import Path
 
-APP_TITLE = '台股庫存、損益與配息管理（多來源資料 v2.1）'
-WINDOW_SIZE = '1720x1120'
+APP_TITLE = '台股庫存、損益與配息管理（多來源資料 v2.2）'
+WINDOW_SIZE = '1760x1160'
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / 'data'
@@ -57,8 +57,8 @@ NAME_OVERRIDES_PATH = DATA_DIR / 'name_overrides.csv'
 
 DIVIDEND_SOURCE_CHOICES = {
     'BOTH': '兩者（建議：歷史＋已公告）',
-    'YFINANCE': '僅 yfinance API（歷史股利／分割）',
-    'SCRAPER': '僅 Yahoo 台灣爬蟲（已公告股利）',
+    'YFINANCE': '僅 yfinance API（歷史股利／股票分割）',
+    'SCRAPER': '僅 Yahoo 台灣股利政策爬蟲',
 }
 DIVIDEND_SOURCE_LABEL_TO_KEY = {
     label: key for key, label in DIVIDEND_SOURCE_CHOICES.items()
@@ -67,8 +67,8 @@ DIVIDEND_SOURCE_LABEL_TO_KEY = {
 SINGLE_TEST_CHOICES = {
     'ALL': '全部測試（行情＋歷史＋公告）',
     'QUOTE': '僅測試行情',
-    'YFINANCE': '僅測試 yfinance 歷史股利／分割',
-    'SCRAPER': '僅測試 Yahoo 台灣公告股利爬蟲',
+    'YFINANCE': '僅測試 yfinance 歷史股利／股票分割',
+    'SCRAPER': '僅測試 Yahoo 台灣股利政策爬蟲',
 }
 SINGLE_TEST_LABEL_TO_KEY = {
     label: key for key, label in SINGLE_TEST_CHOICES.items()

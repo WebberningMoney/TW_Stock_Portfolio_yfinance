@@ -418,6 +418,32 @@ class Database:
             Database._action_values(actions),
         )
 
+    def clear_actions_for_symbols(
+        self,
+        symbols: list[str],
+        sources: set[str] | None = None,
+    ) -> int:
+        """在重新同步前清除指定持股及資料來源的舊股利／分割資料。"""
+        normalized_symbols = sorted({symbol for symbol in symbols if symbol})
+        if not normalized_symbols:
+            return 0
+
+        symbol_marks = ','.join('?' for _ in normalized_symbols)
+        parameters: list[object] = list(normalized_symbols)
+        where = f'symbol IN ({symbol_marks})'
+        if sources:
+            normalized_sources = sorted(sources)
+            source_marks = ','.join('?' for _ in normalized_sources)
+            where += f' AND source IN ({source_marks})'
+            parameters.extend(normalized_sources)
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                f'DELETE FROM corporate_actions WHERE {where}',
+                parameters,
+            )
+            return max(int(cursor.rowcount or 0), 0)
+
     def replace_actions_for_symbol(
         self,
         symbol: str,
@@ -465,7 +491,7 @@ class Database:
             'yfinance': 10,
         }
         source_labels = {
-            'yahoo_tw_scraper': '爬蟲／Yahoo 台灣已公告',
+            'yahoo_tw_scraper': '爬蟲／Yahoo 台灣股利政策',
             'yfinance': 'API／yfinance 歷史',
         }
 
