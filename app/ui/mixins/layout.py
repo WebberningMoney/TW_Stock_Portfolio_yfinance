@@ -79,7 +79,7 @@ class LayoutMixin:
         ttk.Label(bar, textvariable=self.status_var).pack(side='left')
         ttk.Label(
             bar,
-            text='v2.0 Refactor｜資料僅供研究，不構成投資建議',
+            text='v2.0.1｜資料僅供研究，不構成投資建議',
             foreground=self.colors['muted'],
         ).pack(side='right')
 

@@ -7,7 +7,7 @@
 
 from pathlib import Path
 
-APP_TITLE = '台股庫存、損益與配息管理（yfinance＋Yahoo 台灣 v2.0 Refactor）'
+APP_TITLE = '台股庫存、損益與配息管理（yfinance＋Yahoo 台灣 v2.0.1）'
 WINDOW_SIZE = '1680x1080'
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

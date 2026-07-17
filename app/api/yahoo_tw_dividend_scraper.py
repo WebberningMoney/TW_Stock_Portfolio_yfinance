@@ -39,7 +39,10 @@ from app.models import CorporateAction, Instrument
 
 ProgressCallback = Callable[[str, int | None, int | None], None]
 
-_PERIOD_RE = re.compile(r'^\d{4}(?:\s*[-/]?\s*Q[1-4])?$', re.IGNORECASE)
+_PERIOD_RE = re.compile(
+    r'^\d{4}(?:\s*[-/]?\s*(?:Q[1-4]|H[12]))?$',
+    re.IGNORECASE,
+)
 _DATE_RE = re.compile(r'^\d{4}[/-]\d{1,2}[/-]\d{1,2}$')
 _NUMBER_RE = re.compile(r'^-?\d+(?:,\d{3})*(?:\.\d+)?$')
 
@@ -53,11 +56,24 @@ def _clean_token(value: Any) -> str:
 
 
 def _normalize_period(value: str) -> str:
+    """
+    將 Yahoo 的股利所屬期間統一成可比較格式。
+
+    支援：
+    - 年度：2026
+    - 季度：2026Q1～2026Q4
+    - 半年度：2026H1、2026H2
+
+    Yahoo 頁面偶爾會在年份與期間代碼間加入空白、斜線或連字號，
+    因此先移除這些分隔字元後再正規化。
+    """
     text = _clean_token(value).upper().replace(' ', '')
     text = text.replace('-', '').replace('/', '')
-    match = re.fullmatch(r'(\d{4})Q([1-4])', text)
+
+    match = re.fullmatch(r'(\d{4})(Q[1-4]|H[12])', text)
     if match:
-        return f'{match.group(1)}Q{match.group(2)}'
+        return f'{match.group(1)}{match.group(2)}'
+
     return text
 
 

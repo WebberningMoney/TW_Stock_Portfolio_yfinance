@@ -36,6 +36,57 @@ def test_parse_announced_etf_dividend_row():
     assert action.source == 'yahoo_tw_scraper'
 
 
+
+def test_parse_announced_etf_half_year_dividend_row():
+    """0050 等半年配 ETF 的 2026H1 / 2026H2 必須能被解析。"""
+    html = '''
+    <html><body>
+      <section id="main-2-QuoteDividend-Proxy">
+        <ul>
+          <li class="dividend-row">
+            <span>2026</span><span>2026H1</span><span>0.36</span>
+            <span>-</span><span>0.70%</span><span>51.45</span>
+            <span>2026/07/21</span><span>-</span>
+            <span>2026/08/10</span><span>-</span><span>9</span>
+          </li>
+        </ul>
+      </section>
+    </body></html>
+    '''
+    instrument = Instrument(
+        symbol='0050.TW', stock_code='0050', name='元大台灣50'
+    )
+    actions = parse_dividend_html(html, instrument)
+    assert len(actions) == 1
+    action = actions[0]
+    assert action.period == '2026H1'
+    assert action.action_date == '2026-07-21'
+    assert action.payment_date == '2026-08-10'
+    assert action.value == 0.36
+    assert action.source == 'yahoo_tw_scraper'
+
+
+def test_parse_half_year_period_with_separator():
+    """Yahoo 若輸出 2026-H1 或 2026/H2，也要正規化。"""
+    html = '''
+    <html><body>
+      <ul>
+        <li>
+          <span>2026</span><span>2026-H1</span><span>1.25</span>
+          <span>-</span><span>2.00%</span><span>62.50</span>
+          <span>2026/07/17</span><span>-</span>
+          <span>2026/08/14</span><span>-</span><span>-</span>
+        </li>
+      </ul>
+    </body></html>
+    '''
+    instrument = Instrument(
+        symbol='0050.TW', stock_code='0050', name='元大台灣50'
+    )
+    actions = parse_dividend_html(html, instrument)
+    assert len(actions) == 1
+    assert actions[0].period == '2026H1'
+
 def test_scraped_dividend_overrides_yfinance_and_uses_payment_month():
     holding = Holding(
         id=None,

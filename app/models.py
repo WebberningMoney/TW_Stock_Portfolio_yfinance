@@ -58,7 +58,7 @@ class CorporateAction:
 
     action_date：股利使用除息日；分割使用事件日。
     payment_date：Yahoo 台灣股利政策頁可取得時，保存現金發放日。
-    period：例如 2026Q2、2025。
+    period：例如 2026Q2、2026H1、2025。
     announcement_status：ANNOUNCED／EX_DATE_PASSED／PAID 等狀態。
     """
 
