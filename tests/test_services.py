@@ -9,6 +9,7 @@ from app.services.dividend_service import (
     REALIZED,
     build_dividend_projection,
     summarize_monthly,
+    summarize_quarterly,
     summarize_year,
 )
 from app.services.portfolio_service import (
@@ -67,19 +68,26 @@ class ServiceTests(unittest.TestCase):
             2026,
             as_of_date=date(2026, 1, 20),
         )
-        self.assertEqual(len(result), 2)
+        # 由最近的季配間隔判斷為季配，因此會用 2026/01 最近一期的
+        # 1.1 元，往後估算 4、7、10 月，而不是套用去年同季的 1.0 元。
+        self.assertEqual(len(result), 4)
         self.assertEqual(result[0].status, REALIZED)
         self.assertEqual(result[0].estimated_amount, 1100.0)
-        self.assertEqual(result[1].status, PENDING)
+        self.assertTrue(all(item.status == PENDING for item in result[1:]))
 
         monthly = {item.month: item for item in summarize_monthly(result, 2026)}
         self.assertEqual(monthly['2026-01'].realized_amount, 1100.0)
-        self.assertEqual(monthly['2026-04'].pending_amount, 1000.0)
+        self.assertEqual(monthly['2026-04'].pending_amount, 1100.0)
+        self.assertEqual(monthly['2026-07'].pending_amount, 1100.0)
+        self.assertEqual(monthly['2026-10'].pending_amount, 1100.0)
 
         yearly = summarize_year(result)
         self.assertEqual(yearly.realized_amount, 1100.0)
-        self.assertEqual(yearly.pending_amount, 1000.0)
-        self.assertEqual(yearly.total_amount, 2100.0)
+        self.assertEqual(yearly.pending_amount, 3300.0)
+        self.assertEqual(yearly.total_amount, 4400.0)
+
+        quarters = summarize_quarterly(result, 2026)
+        self.assertEqual([item.total_amount for item in quarters], [1100.0] * 4)
 
     def test_past_year_does_not_add_estimates(self):
         holding = Holding(
@@ -157,3 +165,56 @@ class DividendAnnouncementSuppressionTests(unittest.TestCase):
         self.assertEqual(result[0].month, '2026-07')
         self.assertEqual(result[0].source, 'yahoo_tw_scraper')
         self.assertFalse(any(item.month == '2026-08' for item in result))
+
+
+class DividendFrequencyForecastTests(unittest.TestCase):
+    def test_annual_stock_uses_latest_annual_policy_once(self):
+        holding = Holding(
+            None, '2608', '2608.TW', '嘉里大榮', 'TWSE', 1000, 30000.0
+        )
+        actions = [
+            CorporateAction(
+                '2608.TW', '2608', '嘉里大榮',
+                '2025-06-13', 'DIVIDEND', 1.3,
+                source='yahoo_tw_scraper',
+                period='2024',
+                payment_date='2025-07-10',
+            ),
+        ]
+        result = build_dividend_projection(
+            [holding], actions, 2026, as_of_date=date(2026, 1, 1)
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].month, '2026-07')
+        self.assertEqual(result[0].dividend_per_share, 1.3)
+        self.assertIn('年配', result[0].basis)
+
+    def test_monthly_product_uses_latest_month_amount_for_future_months(self):
+        holding = Holding(
+            None, '00929', '00929.TW', '復華台灣科技優息', 'TWSE',
+            1000, 18000.0
+        )
+        actions = [
+            CorporateAction(
+                '00929.TW', '00929', '復華台灣科技優息',
+                '2026-04-15', 'DIVIDEND', 0.7,
+            ),
+            CorporateAction(
+                '00929.TW', '00929', '復華台灣科技優息',
+                '2026-05-15', 'DIVIDEND', 0.75,
+            ),
+            CorporateAction(
+                '00929.TW', '00929', '復華台灣科技優息',
+                '2026-06-15', 'DIVIDEND', 0.8,
+            ),
+        ]
+        result = build_dividend_projection(
+            [holding], actions, 2026, as_of_date=date(2026, 6, 20)
+        )
+        projected = [item for item in result if item.source == 'projection']
+        self.assertEqual([item.month for item in projected], [
+            '2026-07', '2026-08', '2026-09',
+            '2026-10', '2026-11', '2026-12',
+        ])
+        self.assertTrue(all(item.dividend_per_share == 0.8 for item in projected))
+        self.assertTrue(all('月配' in item.basis for item in projected))

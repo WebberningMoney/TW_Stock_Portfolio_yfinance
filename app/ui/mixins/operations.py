@@ -96,7 +96,9 @@ class OperationsMixin:
         self.progress_bar.stop()
         self.progress_bar.configure(mode='indeterminate', maximum=100)
         self.progress_bar.start(10)
-        self._append_log(f'開始：{label}')
+        self._append_log('─' * 72)
+        self._append_log(f'開始作業：{label}')
+        self._append_log('程式會在下方逐步說明目前正在做什麼；若某檔失敗，會自動重試後再列出代號。')
         self._set_busy(True)
 
     def _finish_operation(self, message: str) -> None:
@@ -105,7 +107,8 @@ class OperationsMixin:
         self.progress_bar['value'] = 100
         self.status_var.set(message)
         self.log_status_var.set(message)
-        self._append_log(f'完成：{message}')
+        self._append_log(f'作業完成：{message}')
+        self._append_log('─' * 72)
         self._set_busy(False)
 
     def _run_background(self, label: str, worker, success_handler) -> None:
@@ -172,7 +175,8 @@ class OperationsMixin:
         self.progress_bar['value'] = 0
         self.status_var.set('操作失敗')
         self.log_status_var.set('操作失敗')
-        self._append_log(f'錯誤：{message}')
+        self._append_log(f'作業中止：{message}')
+        self._append_log('建議先查看上方最後幾行 LOG，確認是網路、單一代號或資料格式問題。')
         self._set_busy(False)
         self.main_notebook.select(self.log_tab)
         messagebox.showerror('操作失敗', message)
@@ -239,7 +243,11 @@ class OperationsMixin:
             return
 
         self._append_log(
-            f'本次股利載入來源：{source_label}；抓取範圍：{range_code}'
+            f'本次股利重建設定：來源＝{source_label}；時間範圍＝{range_code}'
+        )
+        self._append_log(
+            '處理順序：確認持股代號 → 清除本次來源舊資料 → '
+            '下載歷史／公告資料 → 合併重複事件 → 更新畫面。'
         )
         self._run_background(
             f'正在重建持股股利資料（{source_label}／{range_code}）……',

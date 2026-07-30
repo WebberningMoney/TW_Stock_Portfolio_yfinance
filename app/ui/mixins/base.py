@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import logging
 import re
 import threading
 import tkinter as tk
@@ -54,6 +55,11 @@ class StyleMixin:
             'pending': '#F59E0B',
             'total': '#7C3AED',
         }
+
+        # Matplotlib 在部分 macOS 字型只有 Regular、沒有獨立 Bold 檔時，
+        # 會把「找不到 bold、改用 600」印到 Terminal。這不是程式錯誤，
+        # 但會讓使用者誤以為啟動失敗，因此只隱藏字型比對的非必要訊息。
+        logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 
         # 優先使用作業系統內建的繁中文字型，避免 Matplotlib 中文亂碼。
         available_fonts = {
@@ -172,6 +178,37 @@ class StyleMixin:
             font=('', 15, 'bold'),
             background=self.colors['surface'],
             foreground=self.colors['total'],
+        )
+        # 配息頁右側使用較緊湊的摘要字型，避免三張年度卡片佔用過多高度。
+        style.configure(
+            'Realized.CompactSummary.TLabel',
+            font=('', 12, 'bold'),
+            background=self.colors['surface'],
+            foreground=self.colors['realized'],
+        )
+        style.configure(
+            'Pending.CompactSummary.TLabel',
+            font=('', 12, 'bold'),
+            background=self.colors['surface'],
+            foreground=self.colors['pending'],
+        )
+        style.configure(
+            'Total.CompactSummary.TLabel',
+            font=('', 12, 'bold'),
+            background=self.colors['surface'],
+            foreground=self.colors['total'],
+        )
+        style.configure(
+            'Quarter.Title.TLabel',
+            font=('', 9, 'bold'),
+            background=self.colors['surface'],
+            foreground=self.colors['muted'],
+        )
+        style.configure(
+            'Quarter.Value.TLabel',
+            font=('', 10, 'bold'),
+            background=self.colors['surface'],
+            foreground=self.colors['primary_dark'],
         )
         style.configure(
             'Treeview',

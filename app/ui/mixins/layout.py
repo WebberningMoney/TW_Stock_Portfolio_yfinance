@@ -42,9 +42,9 @@ class LayoutMixin:
         outer = ttk.Frame(self.root, padding=(14, 12, 14, 10))
         outer.pack(fill='both', expand=True)
         self._build_app_header(outer)
-        self._build_input_panel(outer)
+        # 資料同步是跨頁共用功能，因此保留在主分頁上方；持股輸入與庫存摘要
+        # 改放到「庫存與損益」頁內，避免配息圖表、設定頁與 LOG 被無關區塊壓縮。
         self._build_sync_panel(outer)
-        self._build_summary(outer)
         self._build_notebook(outer)
         self._build_status_bar(outer)
 
@@ -80,7 +80,7 @@ class LayoutMixin:
         ttk.Label(bar, textvariable=self.status_var).pack(side='left')
         ttk.Label(
             bar,
-            text='v2.2｜多來源資料僅供研究，不構成投資建議',
+            text='v2.3｜多來源資料與歷史模式估算僅供研究，不構成投資建議',
             foreground=self.colors['muted'],
         ).pack(side='right')
 
@@ -159,66 +159,62 @@ class LayoutMixin:
         self.total_cost_entry.bind('<Return>', self._on_total_cost_commit)
 
     def _build_sync_panel(self, parent: ttk.Frame) -> None:
+        """建立精簡的跨頁同步工具列。
+
+        v2.3 把原本兩列按鈕縮成單列，減少每個功能分頁都被同步區占用的高度。
+        """
         frame = ttk.LabelFrame(
             parent,
             text='資料來源與同步',
-            padding=6,
+            padding=(7, 5),
         )
         frame.pack(fill='x', pady=(0, 6))
 
-        first_row = ttk.Frame(frame)
-        first_row.pack(fill='x')
         button_specs = [
-            (
-                '① 選擇類型並建立商品清冊',
-                self.discover_universe_async,
-            ),
-            ('② 更新全部商品行情', self.sync_all_quotes_async),
-            ('更新持股行情', self.sync_holding_quotes_async),
+            ('① 建立商品清冊', self.discover_universe_async, 'Accent.TButton'),
+            ('② 更新全部行情', self.sync_all_quotes_async, 'TButton'),
+            ('更新持股行情', self.sync_holding_quotes_async, 'TButton'),
         ]
-        for index, (text, command) in enumerate(button_specs):
+        for text, command, style_name in button_specs:
             button = ttk.Button(
-                first_row,
+                frame,
                 text=text,
                 command=command,
-                style='Accent.TButton' if index == 0 else 'TButton',
+                style=style_name,
             )
-            button.pack(side='left', padx=4)
+            button.pack(side='left', padx=3)
             self.sync_buttons.append(button)
 
-        ttk.Separator(frame, orient='horizontal').pack(fill='x', pady=7)
-        second_row = ttk.Frame(frame)
-        second_row.pack(fill='x')
-        ttk.Label(second_row, text='股利載入來源：').pack(side='left', padx=(4, 3))
+        ttk.Separator(frame, orient='vertical').pack(
+            side='left', fill='y', padx=7
+        )
+        ttk.Label(frame, text='股利來源：').pack(side='left', padx=(0, 3))
         self.dividend_source_combo = ttk.Combobox(
-            second_row,
+            frame,
             textvariable=self.dividend_source_var,
             values=list(DIVIDEND_SOURCE_CHOICES.values()),
             state='readonly',
-            width=36,
+            width=34,
         )
-        self.dividend_source_combo.pack(side='left', padx=(0, 7))
+        self.dividend_source_combo.pack(side='left', padx=(0, 5))
         self.dividend_source_combo.bind(
             '<<ComboboxSelected>>',
             lambda _event: self.remember_dividend_source(),
         )
         action_button = ttk.Button(
-            second_row,
-            text='③ 更新持股股利資料',
+            frame,
+            text='③ 重建持股股利資料',
             command=self.sync_actions_async,
             style='Accent.TButton',
         )
-        action_button.pack(side='left', padx=4)
+        action_button.pack(side='left', padx=3)
         self.sync_buttons.append(action_button)
 
         ttk.Label(
-            second_row,
-            text=(
-                '同步前會清除選定來源舊資料；抓取範圍與效能參數可在設定頁調整。'
-                '下載過程請查看 LOG。'
-            ),
+            frame,
+            text='範圍、速度與重試次數可在「抓取參數」調整；進度請看 LOG。',
             foreground=self.colors['muted'],
-        ).pack(side='left', padx=12)
+        ).pack(side='right', padx=(10, 3))
 
     def _build_summary(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(
@@ -266,6 +262,10 @@ class LayoutMixin:
         self.main_notebook.add(data_tab, text='已載入資料')
         self.main_notebook.add(self.settings_tab, text='抓取參數／單筆測試')
         self.main_notebook.add(self.log_tab, text='下載進度／LOG')
+
+        # 持股輸入與投資組合摘要只在庫存頁顯示，其他頁可獲得更多畫面高度。
+        self._build_input_panel(holding_tab)
+        self._build_summary(holding_tab)
 
         holding_toolbar = ttk.Frame(holding_tab)
         holding_toolbar.pack(fill='x', pady=(0, 6))

@@ -7,8 +7,8 @@
 
 from pathlib import Path
 
-APP_TITLE = '台股庫存、損益與配息管理（多來源資料 v2.2）'
-WINDOW_SIZE = '1760x1160'
+APP_TITLE = '台股庫存、損益與配息管理（多來源資料 v2.3）'
+WINDOW_SIZE = '1880x1220'
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / 'data'

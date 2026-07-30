@@ -66,6 +66,12 @@ class PortfolioApp(
         self.dividend_realized_var = tk.StringVar(value='NT$ 0')
         self.dividend_pending_var = tk.StringVar(value='NT$ 0')
         self.dividend_total_var = tk.StringVar(value='NT$ 0')
+        self.dividend_quarter_vars = {
+            quarter: tk.StringVar(
+                value='NT$ 0\n已實現 0｜未領 0'
+            )
+            for quarter in ('Q1', 'Q2', 'Q3', 'Q4')
+        }
 
         self.loaded_search_var = tk.StringVar()
         self.holding_search_var = tk.StringVar()
@@ -101,15 +107,15 @@ class PortfolioApp(
         self.root.update_idletasks()
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        # 盡量使用螢幕可用空間，仍保留少量邊界避免遮到 macOS 選單列／Dock。
-        width = min(1800, max(1180, int(screen_w * 0.96)))
-        height = max(760, screen_h - 48)
-        height = min(height, 1180)
+        # v2.3 盡量使用完整可用畫面：只在四周保留少量空間給 macOS
+        # 選單列、Dock 與視窗陰影。大型螢幕不再把高度硬限制在 1180px。
+        width = max(1180, min(1880, screen_w - 24))
+        height = max(800, screen_h - 34)
         x = max((screen_w - width) // 2, 0)
-        y = max((screen_h - height) // 2, 0)
+        y = max((screen_h - height) // 2, 18)
         self.root.geometry(f'{width}x{height}+{x}+{y}')
-        # 筆電或窄螢幕預設收合 AI 研究區，優先保留庫存表寬度。
-        if screen_w < 1500 and getattr(self, 'ai_sidebar_visible', False):
+        # 筆電或中型螢幕預設收合 AI 研究區，優先保留庫存表寬度；需要時可再手動展開。
+        if screen_w < 1750 and getattr(self, 'ai_sidebar_visible', False):
             self.root.after(350, self._toggle_ai_sidebar)
 
     def _bind_global_shortcuts(self) -> None:

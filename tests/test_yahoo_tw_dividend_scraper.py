@@ -130,13 +130,21 @@ def test_scraped_dividend_overrides_yfinance_and_uses_payment_month():
         target_year=2026,
         as_of_date=date(2026, 7, 14),
     )
-    assert len(projections) == 1
+    # Q2 已公告資料應保留；所屬期間明確是 Q2，因此系統會視為季配，
+    # 並用最近一季 1.35 元推估下一季，但不重複計算 Q2 本身。
+    assert len(projections) == 2
     item = projections[0]
     assert item.month == '2026-08'
     assert item.status == PENDING
     assert item.estimated_amount == 1350
     assert item.payment_date == '2026-08-10'
     assert '已公告' in item.basis
+
+    projected = projections[1]
+    assert projected.month == '2026-11'
+    assert projected.source == 'projection'
+    assert projected.dividend_per_share == 1.35
+
 
 
 def test_parse_2608_cash_payment_date_uses_yahoo_column_alignment():

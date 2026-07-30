@@ -241,8 +241,8 @@ class SyncService:
 
         if progress:
             progress(
-                f'股利資料來源：{self._source_mode_label(mode)}；'
-                f'抓取範圍：{self.settings.action_period}；共 {total} 檔持股',
+                f'[步驟 1/5｜確認持股] 來源：{self._source_mode_label(mode)}；'
+                f'時間範圍：{self.settings.action_period}；準備處理 {total} 檔持股',
                 0,
                 total or 1,
             )
@@ -269,6 +269,14 @@ class SyncService:
                     continue
             instruments.append(instrument)
 
+        if progress:
+            progress(
+                f'[步驟 1/5｜確認持股] 完成：可處理 {len(instruments)} 檔；'
+                f'代號解析失敗 {len(failed_items)} 檔',
+                len(instruments),
+                total or 1,
+            )
+
         selected_sources: set[str] = set()
         if mode in {'BOTH', 'YFINANCE'}:
             selected_sources.add('yfinance')
@@ -281,8 +289,8 @@ class SyncService:
         )
         if progress:
             progress(
-                f'[資料重建] 已先清除選定來源舊資料 {cleared_count} 筆；'
-                f'接著依 {self.settings.action_period} 範圍重新載入',
+                f'[步驟 2/5｜清除舊資料] 已刪除本次所選來源的舊紀錄 '
+                f'{cleared_count} 筆；接著重新下載最近 {self.settings.action_period}',
                 0,
                 max(len(instruments), 1),
             )
@@ -291,6 +299,14 @@ class SyncService:
         announced_dividend_count = 0
 
         # yfinance 支援批次 actions=True，比逐檔 Ticker.history 更快。
+        if progress:
+            progress(
+                '[步驟 3/5｜yfinance 歷史] '
+                + ('開始下載歷史股利與股票分割' if mode in {'BOTH', 'YFINANCE'}
+                   else '本次未選取 yfinance，直接略過'),
+                None,
+                None,
+            )
         if mode in {'BOTH', 'YFINANCE'} and instruments:
             action_map, api_failed = self.client.download_actions(
                 instruments,
@@ -315,9 +331,17 @@ class SyncService:
             for symbol in api_failed:
                 failed_items.append(f'{symbol} API／歷史股利／分割下載失敗')
         elif progress:
-            progress('[API／歷史] 本次未選取，略過', None, None)
+            progress('[步驟 3/5｜yfinance 歷史] 略過完成', None, None)
 
         # Yahoo 台灣公告頁以小型執行緒池並行；每個執行緒使用獨立 Session。
+        if progress:
+            progress(
+                '[步驟 4/5｜Yahoo 台灣公告] '
+                + ('開始逐檔讀取股利政策頁' if mode in {'BOTH', 'SCRAPER'}
+                   else '本次未選取公告爬蟲，直接略過'),
+                None,
+                None,
+            )
         if mode in {'BOTH', 'SCRAPER'} and instruments:
             completed = 0
             with ThreadPoolExecutor(
@@ -374,9 +398,16 @@ class SyncService:
                             len(instruments),
                         )
         elif progress:
-            progress('[爬蟲／Yahoo 台灣] 本次未選取，略過', None, None)
+            progress('[步驟 4/5｜Yahoo 台灣公告] 略過完成', None, None)
 
-        # 兩來源完成後再統一整合重複事件。
+        # 兩來源完成後再統一整合重複事件。這一步只保留欄位較完整的一筆，
+        # 避免 yfinance 與爬蟲同時出現同一除息日、同一金額而重複計算。
+        if progress:
+            progress(
+                '[步驟 5/5｜整理資料] 正在合併 API 與爬蟲的重複股利事件',
+                0,
+                len(instruments) or 1,
+            )
         for index, instrument in enumerate(instruments, start=1):
             merge_messages = self.database.consolidate_duplicate_actions_for_symbol(
                 instrument.symbol
@@ -394,12 +425,20 @@ class SyncService:
             f'announced_dividends={announced_dividend_count}, '
             f'failed_items={failed_items[:50]}',
         )
-        if progress and failed_items:
-            progress(
-                '重試後仍失敗的項目：' + '｜'.join(failed_items[:20]),
-                len(instruments),
-                len(instruments) or 1,
-            )
+        if progress:
+            if failed_items:
+                progress(
+                    '[結果] 以下項目已重試仍失敗：' + '｜'.join(failed_items[:20]),
+                    len(instruments),
+                    len(instruments) or 1,
+                )
+            else:
+                progress(
+                    f'[結果] 股利資料重建完成：yfinance {history_action_count} 筆；'
+                    f'Yahoo 台灣公告 {announced_dividend_count} 筆；沒有失敗項目',
+                    len(instruments),
+                    len(instruments) or 1,
+                )
         return ActionSyncResult(
             source_mode=mode,
             history_action_count=history_action_count,

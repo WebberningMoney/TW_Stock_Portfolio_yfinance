@@ -326,7 +326,11 @@ class YahooTwDividendScraper:
         instrument: Instrument,
         progress: ProgressCallback | None = None,
     ) -> list[CorporateAction]:
-        """抓取一檔商品股利政策，失敗時依設定重試。"""
+        """讀取一檔 Yahoo 台灣股利政策頁，失敗時自動重試。
+
+        這裡抓的是「網頁已公告資料」，主要補足 yfinance 尚未收錄的未來
+        除息日、現金發放日與所屬期間；不會抓新聞或其他頁面。
+        """
         url = YAHOO_TW_DIVIDEND_PAGE.format(symbol=instrument.symbol)
         last_error: Exception | None = None
 
@@ -334,8 +338,9 @@ class YahooTwDividendScraper:
             try:
                 if progress:
                     progress(
-                        f'[爬蟲／Yahoo 台灣] {instrument.symbol}：'
-                        f'第 {attempt}/{self.settings.item_retries} 次嘗試',
+                        f'[Yahoo 台灣公告][{instrument.symbol}] '
+                        f'正在連線股利政策頁，第 {attempt}/'
+                        f'{self.settings.item_retries} 次嘗試',
                         attempt,
                         self.settings.item_retries,
                     )
@@ -355,6 +360,14 @@ class YahooTwDividendScraper:
                     actions,
                     self.settings.action_period,
                 )
+                if progress:
+                    progress(
+                        f'[Yahoo 台灣公告][{instrument.symbol}] 解析成功：'
+                        f'頁面共 {len(actions)} 筆，依 {self.settings.action_period} '
+                        f'範圍保留 {len(filtered)} 筆',
+                        attempt,
+                        self.settings.item_retries,
+                    )
                 if self.settings.scraper_delay_seconds > 0:
                     time.sleep(self.settings.scraper_delay_seconds)
                 return filtered
@@ -362,8 +375,8 @@ class YahooTwDividendScraper:
                 last_error = exc
                 if progress:
                     progress(
-                        f'[爬蟲／Yahoo 台灣] {instrument.symbol} '
-                        f'第 {attempt} 次失敗：{exc}',
+                        f'[Yahoo 台灣公告][{instrument.symbol}] '
+                        f'第 {attempt} 次讀取失敗；原因：{exc}',
                         attempt,
                         self.settings.item_retries,
                     )

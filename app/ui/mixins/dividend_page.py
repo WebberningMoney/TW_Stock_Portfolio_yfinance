@@ -28,6 +28,7 @@ from app.services.dividend_service import (
     build_dividend_projection,
     group_month_components,
     summarize_monthly,
+    summarize_quarterly,
     summarize_year,
 )
 from app.services.portfolio_service import build_holding_views, summarize_portfolio
@@ -37,8 +38,17 @@ from app.utils import decimal, money, normalize_stock_code, percent
 
 class DividendPageMixin:
     def _build_dividend_tab(self, parent) -> None:
+        """建立「每月配息估算」頁面。
+
+        v2.3 將空間重新分配為：
+        - 左側：完整長條圖與圖例。
+        - 右上：緊湊的年度／季度摘要。
+        - 右下：12 個月摘要、選定月份組成、全年明細。
+
+        這樣年度摘要不再佔用整頁寬度，也能讓表格獲得更多垂直空間。
+        """
         controls = ttk.Frame(parent)
-        controls.pack(fill='x', pady=(0, 7))
+        controls.pack(fill='x', pady=(0, 6))
         ttk.Label(controls, text='分析年度：').pack(side='left')
         ttk.Entry(
             controls,
@@ -54,65 +64,28 @@ class DividendPageMixin:
         ttk.Label(
             controls,
             text=(
-                '已實現優先依現金發放日判定；未領包含已公告未發放與歷史模式估算。'
-                '金額均依目前持股股數估算。'
+                '有現金發放日就以發放日判斷；尚未公告的期次會依最近一次'
+                '年配／半年配／季配／月配政策估算。'
             ),
             foreground=self.colors['muted'],
-        ).pack(side='left', padx=16)
+        ).pack(side='left', padx=14)
 
-        summary_frame = ttk.LabelFrame(
-            parent,
-            text='年度股利摘要',
-            padding=7,
-        )
-        summary_frame.pack(fill='x', pady=(0, 7))
-        dividend_cards = [
-            ('已實現股利（估算）', self.dividend_realized_var,
-             'Realized.Summary.TLabel'),
-            ('未領／預估股利', self.dividend_pending_var,
-             'Pending.Summary.TLabel'),
-            ('當年度股利總和', self.dividend_total_var,
-             'Total.Summary.TLabel'),
-        ]
-        for index, (title, variable, style_name) in enumerate(dividend_cards):
-            card = ttk.Frame(
-                summary_frame,
-                padding=8,
-                style='Card.TFrame',
-            )
-            card.grid(row=0, column=index, sticky='nsew', padx=7)
-            summary_frame.columnconfigure(index, weight=1)
-            ttk.Label(
-                card,
-                text=title,
-                style='Card.TLabel',
-            ).pack()
-            ttk.Label(
-                card,
-                textvariable=variable,
-                style=style_name,
-            ).pack(pady=(4, 0))
-
-        # v2.2：維持左右切版。左側專注圖表，右側完整呈現摘要與明細。
         pane = ttk.Panedwindow(parent, orient='horizontal')
         self.dividend_pane = pane
         pane.pack(fill='both', expand=True)
 
         chart_frame = ttk.LabelFrame(
             pane,
-            text='每月股利金額與持股組成（滑鼠移到月份可查看明細；點擊可切換月份）',
+            text='每月股利金額與持股組成（滑鼠移到月份看明細；點擊月份切換右側表格）',
             padding=5,
         )
-        tables_frame = ttk.LabelFrame(
-            pane,
-            text='月份與全年明細',
-            padding=5,
-        )
+        right_frame = ttk.Frame(pane)
         pane.add(chart_frame, weight=3)
-        pane.add(tables_frame, weight=2)
+        pane.add(right_frame, weight=2)
 
+        # 左側圖表盡量吃滿可用高度，避免圖例或標題被裁切。
         self.dividend_figure = Figure(
-            figsize=(10.0, 7.2),
+            figsize=(10.4, 8.0),
             dpi=100,
             facecolor=self.colors['surface'],
         )
@@ -122,7 +95,7 @@ class DividendPageMixin:
             master=chart_frame,
         )
         chart_widget = self.dividend_canvas.get_tk_widget()
-        chart_widget.configure(height=650)
+        chart_widget.configure(height=720)
         chart_widget.pack(fill='both', expand=True)
 
         self.root.after_idle(self._set_default_dividend_sash)
@@ -133,6 +106,68 @@ class DividendPageMixin:
             'button_press_event', self._on_dividend_chart_click
         )
 
+        # 右上：年度摘要改成直欄；季度摘要以 2×2 卡片呈現。
+        summary_frame = ttk.LabelFrame(
+            right_frame,
+            text='年度與季度股利摘要',
+            padding=6,
+        )
+        summary_frame.pack(fill='x', pady=(0, 6))
+        summary_frame.columnconfigure(0, weight=1)
+        summary_frame.columnconfigure(1, weight=2)
+
+        annual_frame = ttk.Frame(summary_frame, style='Card.TFrame', padding=6)
+        annual_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
+        annual_frame.columnconfigure(1, weight=1)
+        annual_rows = [
+            ('已實現', self.dividend_realized_var, 'Realized.CompactSummary.TLabel'),
+            ('未領／預估', self.dividend_pending_var, 'Pending.CompactSummary.TLabel'),
+            ('全年合計', self.dividend_total_var, 'Total.CompactSummary.TLabel'),
+        ]
+        for row, (title, variable, style_name) in enumerate(annual_rows):
+            ttk.Label(
+                annual_frame,
+                text=title,
+                style='Card.TLabel',
+            ).grid(row=row, column=0, sticky='w', padx=(2, 8), pady=4)
+            ttk.Label(
+                annual_frame,
+                textvariable=variable,
+                style=style_name,
+            ).grid(row=row, column=1, sticky='e', padx=2, pady=4)
+
+        quarter_frame = ttk.Frame(summary_frame, style='Card.TFrame', padding=4)
+        quarter_frame.grid(row=0, column=1, sticky='nsew')
+        for column in range(2):
+            quarter_frame.columnconfigure(column, weight=1)
+        for index, quarter in enumerate(('Q1', 'Q2', 'Q3', 'Q4')):
+            card = ttk.Frame(quarter_frame, style='Card.TFrame', padding=5)
+            card.grid(
+                row=index // 2,
+                column=index % 2,
+                sticky='nsew',
+                padx=3,
+                pady=3,
+            )
+            ttk.Label(
+                card,
+                text=f'{quarter} 領到／預估股息',
+                style='Quarter.Title.TLabel',
+            ).pack(anchor='w')
+            ttk.Label(
+                card,
+                textvariable=self.dividend_quarter_vars[quarter],
+                style='Quarter.Value.TLabel',
+                justify='left',
+            ).pack(anchor='w', pady=(2, 0))
+
+        # 右下：表格 Notebook 使用剩餘空間。
+        tables_frame = ttk.LabelFrame(
+            right_frame,
+            text='月份與全年明細',
+            padding=5,
+        )
+        tables_frame.pack(fill='both', expand=True)
         self.dividend_table_tabs = ttk.Notebook(tables_frame)
         table_tabs = self.dividend_table_tabs
         table_tabs.pack(fill='both', expand=True)
@@ -153,12 +188,12 @@ class DividendPageMixin:
                 'total': '月份合計',
             },
             {
-                'month': 105,
-                'realized': 135,
-                'pending': 135,
-                'total': 135,
+                'month': 95,
+                'realized': 125,
+                'pending': 125,
+                'total': 125,
             },
-            height=14,
+            height=16,
         )
         self.monthly_tree.tag_configure(
             'has_realized', foreground=self.colors['realized']
@@ -183,9 +218,9 @@ class DividendPageMixin:
         )
         ttk.Label(
             month_controls,
-            text='實心＝已實現；斜線＝未領／估算。',
+            text='實心＝已實現；斜線＝未領／公告／估算。',
             foreground=self.colors['muted'],
-        ).pack(side='left', padx=10)
+        ).pack(side='left', padx=9)
 
         self.dividend_component_tree = self._create_tree(
             component_tab,
@@ -200,15 +235,15 @@ class DividendPageMixin:
                 'basis': '依據',
             },
             {
-                'status': 100,
-                'code': 80,
-                'name': 145,
-                'shares': 100,
-                'dps': 100,
-                'amount': 120,
-                'basis': 210,
+                'status': 95,
+                'code': 75,
+                'name': 130,
+                'shares': 90,
+                'dps': 90,
+                'amount': 110,
+                'basis': 260,
             },
-            height=14,
+            height=16,
         )
         self.dividend_component_tree.tag_configure(
             REALIZED, foreground=self.colors['realized']
@@ -229,12 +264,12 @@ class DividendPageMixin:
             ),
         ))
         widths = {
-            'month': 80, 'status': 95, 'symbol': 100, 'name': 130,
-            'shares': 80, 'dps': 90, 'amount': 110, 'period': 85,
-            'basis': 220, 'reference': 100, 'payment': 100,
+            'month': 75, 'status': 90, 'symbol': 95, 'name': 120,
+            'shares': 75, 'dps': 85, 'amount': 105, 'period': 85,
+            'basis': 260, 'reference': 95, 'payment': 95,
         }
         self.dividend_tree = self._create_tree(
-            detail_tab, columns, headings, widths, height=14
+            detail_tab, columns, headings, widths, height=16
         )
         self.dividend_tree.tag_configure(
             REALIZED, foreground=self.colors['realized']
@@ -244,7 +279,7 @@ class DividendPageMixin:
         )
 
     def _set_default_dividend_sash(self) -> None:
-        """左右切版預設讓圖表約占 58%，右側表格保留足夠寬度。"""
+        """左右切版預設讓圖表約占 60%，右側摘要與表格仍保有可讀寬度。"""
         pane = getattr(self, 'dividend_pane', None)
         if pane is None:
             return
@@ -253,7 +288,7 @@ class DividendPageMixin:
         if width < 900:
             return
         try:
-            position = min(max(int(width * 0.58), 650), width - 520)
+            position = min(max(int(width * 0.60), 680), width - 500)
             pane.sashpos(0, position)
         except tk.TclError:
             pass
@@ -276,6 +311,7 @@ class DividendPageMixin:
         )
         monthly = summarize_monthly(projections, target_year)
         year_summary = summarize_year(projections)
+        quarter_summaries = summarize_quarterly(projections, target_year)
 
         self._dividend_projections = projections
         self._dividend_month_groups = group_month_components(projections)
@@ -289,6 +325,13 @@ class DividendPageMixin:
         self.dividend_total_var.set(
             f'NT$ {money(year_summary.total_amount)}'
         )
+
+        for quarter in quarter_summaries:
+            self.dividend_quarter_vars[quarter.quarter].set(
+                f'NT$ {money(quarter.total_amount)}\n'
+                f'已實現 {money(quarter.realized_amount)}｜'
+                f'未領 {money(quarter.pending_amount)}'
+            )
 
         for tree in (self.monthly_tree, self.dividend_tree):
             for item in tree.get_children():
@@ -469,14 +512,14 @@ class DividendPageMixin:
                 va='bottom',
                 fontsize=8.5,
                 color=self.colors['text'],
-                fontweight='bold',
+                fontweight=600,
             )
 
         ax.set_title(
             f'{target_year} 年每月股利組成',
             loc='left',
             fontsize=13,
-            fontweight='bold',
+            fontweight=600,
             color=self.colors['primary_dark'],
             pad=7,
         )

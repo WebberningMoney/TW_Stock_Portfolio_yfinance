@@ -979,11 +979,11 @@ class YFinanceClient:
         instruments: list[Instrument],
         progress: ProgressCallback | None = None,
     ) -> tuple[dict[str, list[CorporateAction]], list[str]]:
-        """批次下載持股的股利與股票分割，失敗項目再逐檔重試。
+        """批次下載持股的歷史股利與股票分割。
 
-        相較逐檔 Ticker.history，批次 download(actions=True) 可共用連線與
-        執行緒，持股較多時會明顯縮短等待時間。沒有股利／分割但行情存在
-        的商品視為成功，回傳空清單。
+        白話流程：先把多檔持股放進同一批下載，若某一檔在批次結果中沒有
+        正常行情，再針對該檔單獨重試。沒有配息不代表下載失敗，只要 Yahoo
+        有正常回傳行情，就會以「0 筆事件」視為成功。
         """
         by_symbol = {item.symbol: item for item in instruments if item.symbol}
         symbols = sorted(by_symbol)
@@ -995,7 +995,8 @@ class YFinanceClient:
         for batch_index, batch in enumerate(batches, start=1):
             _emit(
                 progress,
-                f'[API／歷史] 批次 {batch_index}/{len(batches)}：{len(batch)} 檔',
+                f'[yfinance 歷史][批次 {batch_index}/{len(batches)}] '
+                f'正在下載 {len(batch)} 檔持股的歷史股利／股票分割',
                 batch_index,
                 len(batches) or 1,
             )
@@ -1021,22 +1022,37 @@ class YFinanceClient:
                 failed_candidates.update(batch)
                 _emit(
                     progress,
-                    f'[API／歷史] 第 {batch_index} 批失敗，改逐檔重試：{exc}',
+                    f'[yfinance 歷史][批次 {batch_index}] 整批下載失敗；'
+                    f'稍後會把這 {len(batch)} 檔拆開逐檔重試。原因：{exc}',
                     batch_index,
                     len(batches) or 1,
                 )
                 continue
 
+            batch_event_count = 0
+            batch_success_count = 0
             for symbol in batch:
                 frame = self._extract_symbol_frame(data, symbol)
                 # Close 存在即可判定 Yahoo 有回應；股利欄全為 0 仍是成功。
                 if frame.empty or 'Close' not in frame.columns:
                     failed_candidates.add(symbol)
                     continue
-                results[symbol] = self._parse_actions_frame(
+                parsed_actions = self._parse_actions_frame(
                     by_symbol[symbol], frame
                 )
+                results[symbol] = parsed_actions
+                batch_event_count += len(parsed_actions)
+                batch_success_count += 1
                 failed_candidates.discard(symbol)
+
+            _emit(
+                progress,
+                f'[yfinance 歷史][批次 {batch_index}] 完成：'
+                f'{batch_success_count}/{len(batch)} 檔有正常回應；'
+                f'共找到 {batch_event_count} 筆股利／分割事件',
+                batch_index,
+                len(batches) or 1,
+            )
 
             if self.settings.action_item_delay_seconds > 0:
                 time.sleep(self.settings.action_item_delay_seconds)
@@ -1051,7 +1067,7 @@ class YFinanceClient:
                 results[symbol] = self.fetch_actions(instrument)
                 _emit(
                     progress,
-                    f'[API／歷史] 逐檔重試成功：{symbol}',
+                    f'[yfinance 歷史][逐檔重試] 成功：{symbol}',
                     item_index,
                     len(retry_symbols) or 1,
                 )
@@ -1059,7 +1075,7 @@ class YFinanceClient:
                 final_failed.append(symbol)
                 _emit(
                     progress,
-                    f'[API／歷史] 最終失敗：{symbol}；{exc}',
+                    f'[yfinance 歷史][逐檔重試] 最終失敗：{symbol}；原因：{exc}',
                     item_index,
                     len(retry_symbols) or 1,
                 )
