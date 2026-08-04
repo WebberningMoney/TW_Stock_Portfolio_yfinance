@@ -40,7 +40,7 @@ class DividendPageMixin:
     def _build_dividend_tab(self, parent) -> None:
         """建立「每月配息估算」頁面。
 
-        v2.3 將空間重新分配為：
+        v2.4 將空間重新分配為：
         - 左側：完整長條圖與圖例。
         - 右上：緊湊的年度／季度摘要。
         - 右下：12 個月摘要、選定月份組成、全年明細。

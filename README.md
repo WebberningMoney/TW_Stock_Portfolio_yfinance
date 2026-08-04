@@ -1,113 +1,90 @@
-# 台股庫存、損益與配息管理 v2.3
+# 台股資產與股息管理 v2.4
 
-v2.3 延續 yfinance 歷史資料＋Yahoo 台灣股利政策爬蟲的混合架構，重點改善「每月配息估算」的空間配置、季別摘要、月配／季配預估邏輯、LOG 可讀性，以及庫存頁的可用空間。
+以 yfinance 歷史資料、Yahoo 台灣股利政策爬蟲與 SQLite 組成的台股持股、損益及配息管理工具。
 
-## v2.3 更新
+## v2.4：macOS App 版本
 
-### 1. Terminal 字型訊息
-
-Matplotlib 在部分 macOS 繁中文字型只有一般字重時，可能顯示：
+本版將使用者可見名稱統一為：
 
 ```text
-findfont: Failed to find font weight bold, now using 600.
+台股資產與股息管理
 ```
 
-v2.3 已改用數值字重並隱藏不影響功能的字型比對訊息。
+以下位置使用相同名稱：
 
-macOS 偶爾仍可能輸出：
+- macOS `.app` 名稱
+- Finder、Spotlight 與 Dock 顯示名稱
+- Tkinter 視窗標題
+- 畫面上方產品標題
+- 狀態列版本文字
+
+另外加入：
+
+- PyInstaller macOS App Bundle 設定
+- 雙擊式 `build_macos_app.command`
+- 自訂 App 圖示
+- 打包後專用的 Application Support、Caches、Logs 與匯出路徑
+- 第一次建立 App 時沿用現有持股資料
+- 啟動失敗時寫入檔案 LOG 並顯示錯誤位置
+
+## 直接建立 macOS App
+
+1. 解壓縮專案。
+2. 雙擊：
 
 ```text
-TSM AdjustCapsLockLEDForKeyTransitionHandling ...
+build_macos_app.command
 ```
 
-這是 macOS 輸入法／鍵盤服務的系統診斷訊息，不是 Python 例外，也不影響資料或 GUI。使用 `.app` 方式啟動時通常不會看到 Terminal 訊息。
-
-### 2. 每月配息頁重新配置
-
-新版版面：
+3. 建立完成後，App 會安裝至：
 
 ```text
-┌───────────────────────────┬────────────────────────┐
-│                           │ 年度摘要（直欄）       │
-│ 每月股利堆疊長條圖        │ Q1～Q4 季度摘要        │
-│                           ├────────────────────────┤
-│                           │ 12 個月／月份／全年表格 │
-└───────────────────────────┴────────────────────────┘
+~/Applications/台股資產與股息管理.app
 ```
 
-年度摘要不再橫跨整個頁面；右側表格取得更多垂直空間，左側圖表也能使用較完整高度。
+之後直接雙擊 App 即可執行，不需要 VSCode 或 Terminal。
 
-### 3. 新增 Q1～Q4 股利摘要
+詳細說明見 [BUILD_MACOS.md](BUILD_MACOS.md)。
 
-每一季都會顯示：
-
-- 季度股利合計
-- 已實現金額
-- 未領／預估金額
-
-### 4. 歷史模式預估更貼近配息頻率
-
-系統會由 Yahoo 所屬期間及歷史發放間隔推測配息頻率：
-
-- 年配：以上一次年度股利估算下一次。
-- 半年配：沿用最近一期金額，每 6 個月推估。
-- 季配：沿用最近一季金額，每 3 個月推估。
-- 月配：沿用最近一個月金額，每月推估。
-
-例如季配 ETF 最近一季每股配息 1.35 元，下一季尚未公告時，會先以 1.35 元估算，而不是直接套用去年同一季的金額。
-
-> 歷史模式估算只是現金流規劃參考，不代表發行公司或投信已公告。
-
-### 5. 庫存與損益頁空間調整
-
-- 持股輸入與投資組合摘要只在「庫存與損益」頁顯示。
-- 配息、已載入資料、設定與 LOG 頁不再被持股輸入區壓縮。
-- 資料同步工具列改為單列。
-- 中型螢幕預設收合 AI 研究區，優先保留庫存表寬度。
-- 主視窗盡量使用目前螢幕可用高度。
-
-### 6. LOG 與程式註解白話化
-
-持股股利更新會依序顯示：
+## 打包後的資料位置
 
 ```text
-步驟 1/5：確認持股代號
-步驟 2/5：清除本次來源舊資料
-步驟 3/5：下載 yfinance 歷史股利／分割
-步驟 4/5：讀取 Yahoo 台灣已公告股利政策
-步驟 5/5：合併重複資料並完成整理
+資料庫與設定：~/Library/Application Support/台股資產與股息管理/
+快取：        ~/Library/Caches/台股資產與股息管理/
+錯誤 LOG：    ~/Library/Logs/台股資產與股息管理/app.log
+CSV 匯出：    ~/Documents/台股資產與股息管理匯出/
 ```
 
-批次下載、逐檔重試、爬蟲保留筆數與最終失敗代號都會使用較白話的中文說明。
+這樣更新或替換 `.app` 時，不會把持股資料一起刪除。
 
-## 安裝
+## 原始碼模式
+
+仍可用原本方式執行：
 
 ```bash
-cd /Users/whuang/Desktop/TW_Stock_Portfolio_yfinance_v2.3
+cd /Users/whuang/Desktop/TW_Stock_Portfolio_yfinance_v2.4
 /opt/anaconda3/envs/shopee-auto/bin/python -m pip install --upgrade -r requirements.txt
 /opt/anaconda3/envs/shopee-auto/bin/python main.py
 ```
 
-## 升級舊資料
+原始碼模式會繼續使用專案內的 `data/` 與 `exports/`。
 
-將舊版的：
+## 主要功能
 
-```text
-data/portfolio_yfinance.db
-```
-
-複製到 v2.3 的 `data/` 即可。也可複製：
-
-```text
-data/app_settings.json
-data/name_overrides.csv
-```
-
-本版沒有破壞性的資料庫 Schema 變更。
+- 建立可篩選商品類型的 Yahoo 台灣商品清冊
+- 更新持股或全部商品行情
+- 持股庫存市值、未實現損益與報酬率
+- yfinance 歷史股利／股票分割
+- Yahoo 台灣已公告股利政策爬蟲
+- 年度、季度與每月股利分析
+- 年配、半年配、季配與月配歷史模式估算
+- API／爬蟲來源切換及單筆測試
+- 進度、重試及白話中文 LOG
+- 商品、行情及股利資料搜尋與 CSV 匯出
 
 ## 資料限制
 
 - yfinance 與 Yahoo 台灣網頁都不是交易所正式結算資料。
 - Yahoo 台灣爬蟲可能因網頁結構改版需要調整。
-- 「已實現」仍依資料中的現金發放日或除息日判定，不等同券商實際入帳紀錄。
-- 月配／季配／年配預估使用最近一期歷史政策，實際金額仍以正式公告為準。
+- 「已實現」依現金發放日或除息日估算，不等同券商實際入帳紀錄。
+- 配息預估使用歷史政策，實際金額仍以正式公告為準。

@@ -107,7 +107,7 @@ class PortfolioApp(
         self.root.update_idletasks()
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        # v2.3 盡量使用完整可用畫面：只在四周保留少量空間給 macOS
+        # v2.4 盡量使用完整可用畫面：只在四周保留少量空間給 macOS
         # 選單列、Dock 與視窗陰影。大型螢幕不再把高度硬限制在 1180px。
         width = max(1180, min(1880, screen_w - 24))
         height = max(800, screen_h - 34)

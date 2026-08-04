@@ -1,21 +1,24 @@
-"""
-集中管理程式設定。
+"""集中管理程式設定。"""
 
-本版本的行情及股利／分割資料核心使用 yfinance；繁中名稱補強使用 Yahoo Finance
-台灣地區的公開搜尋／報價頁，不呼叫 TWSE 或 TPEx OpenAPI。
-"""
+from app.branding import (
+    APP_BUNDLE_IDENTIFIER,
+    APP_CATEGORY,
+    APP_NAME,
+    APP_SUBTITLE,
+    APP_VERSION,
+)
+from app.paths import (
+    DATA_DIR,
+    DATABASE_PATH,
+    EXPORT_DIR,
+    LOG_FILE_PATH,
+    NAME_OVERRIDES_PATH,
+    SETTINGS_PATH,
+    YFINANCE_CACHE_DIR,
+)
 
-from pathlib import Path
-
-APP_TITLE = '台股庫存、損益與配息管理（多來源資料 v2.3）'
+APP_TITLE = APP_NAME
 WINDOW_SIZE = '1880x1220'
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / 'data'
-DATABASE_PATH = DATA_DIR / 'portfolio_yfinance.db'
-SETTINGS_PATH = DATA_DIR / 'app_settings.json'
-EXPORT_DIR = PROJECT_ROOT / 'exports'
-YFINANCE_CACHE_DIR = DATA_DIR / 'yfinance_cache'
 
 MARKET_CHOICES = {
     'AUTO': '自動判斷',
@@ -26,7 +29,6 @@ MARKET_CHOICES = {
 
 MARKET_LABEL_TO_KEY = {label: key for key, label in MARKET_CHOICES.items()}
 
-# 建立商品清冊時可選擇的範圍。預設不下載權證及其他衍生商品。
 UNIVERSE_CATEGORY_CHOICES = {
     'TWSE_STOCK': '上市公司股票',
     'TPEX_STOCK': '上櫃／興櫃公司股票（Yahoo .TWO）',
@@ -49,11 +51,6 @@ YAHOO_LOCALIZED_QUOTE_URL = 'https://query1.finance.yahoo.com/v7/finance/quote'
 YAHOO_LOCALIZED_SEARCH_URL = 'https://query2.finance.yahoo.com/v1/finance/search'
 YAHOO_TW_QUOTE_PAGE = 'https://tw.stock.yahoo.com/quote/{symbol}'
 YAHOO_TW_DIVIDEND_PAGE = 'https://tw.stock.yahoo.com/quote/{symbol}/dividend'
-NAME_OVERRIDES_PATH = DATA_DIR / 'name_overrides.csv'
-
-# 可調整的批次、重試、間隔與逾時參數由 app/settings.py 管理。
-
-
 
 DIVIDEND_SOURCE_CHOICES = {
     'BOTH': '兩者（建議：歷史＋已公告）',

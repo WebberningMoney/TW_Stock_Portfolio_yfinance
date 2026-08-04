@@ -15,6 +15,7 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
 
+from app.branding import APP_NAME, APP_SUBTITLE, APP_VERSION
 from app.config import (
     DIVIDEND_SOURCE_CHOICES,
     EXPORT_DIR,
@@ -57,12 +58,12 @@ class LayoutMixin:
         title_box.pack(side='left', fill='x', expand=True)
         ttk.Label(
             title_box,
-            text='台股資產與股息儀表板',
+            text=APP_NAME,
             style='Header.Title.TLabel',
         ).pack(anchor='w')
         ttk.Label(
             title_box,
-            text='持股、損益、yfinance 歷史資料、Yahoo 台灣股利政策與研究提示整合',
+            text=APP_SUBTITLE,
             style='Header.Subtitle.TLabel',
         ).pack(anchor='w', pady=(2, 0))
 
@@ -80,7 +81,7 @@ class LayoutMixin:
         ttk.Label(bar, textvariable=self.status_var).pack(side='left')
         ttk.Label(
             bar,
-            text='v2.3｜多來源資料與歷史模式估算僅供研究，不構成投資建議',
+            text=f'{APP_NAME} v{APP_VERSION}｜資料與估算僅供研究，不構成投資建議',
             foreground=self.colors['muted'],
         ).pack(side='right')
 
@@ -161,7 +162,7 @@ class LayoutMixin:
     def _build_sync_panel(self, parent: ttk.Frame) -> None:
         """建立精簡的跨頁同步工具列。
 
-        v2.3 把原本兩列按鈕縮成單列，減少每個功能分頁都被同步區占用的高度。
+        v2.4 把原本兩列按鈕縮成單列，減少每個功能分頁都被同步區占用的高度。
         """
         frame = ttk.LabelFrame(
             parent,
