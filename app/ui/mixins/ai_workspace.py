@@ -151,13 +151,7 @@ class AiWorkspaceMixin:
         widget.insert('1.0', content)
 
     def _selected_holding_view(self):
-        selected = self.holding_tree.selection()
-        if not selected:
-            return None
-        values = self.holding_tree.item(selected[0], 'values')
-        if not values:
-            return None
-        return self._holding_view_by_symbol.get(str(values[0]))
+        return self.holding_view_state.selected()
 
     def _build_news_prompt(self, view) -> str:
         today_text = date.today().isoformat()
@@ -207,7 +201,7 @@ class AiWorkspaceMixin:
             '5. 所有最新事實附日期與來源，並清楚標示推論。'
         )
 
-    def _refresh_ai_prompts(self) -> None:
+    def refresh_prompts(self) -> None:
         view = self._selected_holding_view()
         if view is None:
             self.ai_selected_var.set('請先在庫存表選取一檔持股')

@@ -396,8 +396,8 @@ class DividendPageMixin:
 
         self._render_dividend_month_components()
         self._render_dividend_chart(monthly, projections, target_year)
-        if self.holding_tree.selection():
-            self._refresh_ai_prompts()
+        if self.holding_view_state.selected() is not None:
+            self.refresh_prompts()
 
     def _render_dividend_month_components(self) -> None:
         """更新使用者目前選定月份的個股／ETF 組成表。"""

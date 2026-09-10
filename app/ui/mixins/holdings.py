@@ -30,7 +30,7 @@ from app.services.dividend_service import (
     summarize_monthly,
     summarize_year,
 )
-from app.services.portfolio_service import build_holding_views, summarize_portfolio
+from app.services.portfolio_service import summarize_portfolio
 from app.ui.universe_dialog import UniverseSelectionDialog
 from app.utils import decimal, money, normalize_stock_code, percent
 
@@ -308,12 +308,14 @@ class HoldingsMixin:
             '確認刪除', f'確定刪除 {symbol}？'
         ):
             self.database.delete_holding(symbol)
+            self.holding_view_state.select(None)
             self.clear_form()
             self.refresh_all_views()
 
     def on_holding_selected(self, _event=None) -> None:
         selected = self.holding_tree.selection()
         if not selected:
+            self.holding_view_state.select(None)
             return
         values = self.holding_tree.item(selected[0], 'values')
         self.yahoo_symbol_var.set(values[0])
@@ -327,7 +329,8 @@ class HoldingsMixin:
         )
         self.shares_var.set(str(values[4]).replace(',', ''))
         self.total_cost_var.set(str(values[5]).replace(',', ''))
-        self._refresh_ai_prompts()
+        self.holding_view_state.select(str(values[0]))
+        self.refresh_prompts()
 
     def clear_form(self) -> None:
         variables = (
@@ -376,10 +379,9 @@ class HoldingsMixin:
                 selected_symbol = str(values[0])
 
         holdings = self.database.list_holdings()
-        views = build_holding_views(
-            holdings, self.database.get_quote_map()
-        )
-        self._holding_view_by_symbol = {item.symbol: item for item in views}
+        quote_map = self.database.get_quote_map()
+        self.holding_view_state.refresh(holdings, quote_map)
+        views = self.holding_view_state.views()
         summary = summarize_portfolio(views)
 
         query = self.holding_search_var.get().strip().casefold()
@@ -442,7 +444,12 @@ class HoldingsMixin:
         if selected_item_id is not None:
             self.holding_tree.selection_set(selected_item_id)
             self.holding_tree.focus(selected_item_id)
-            self._refresh_ai_prompts()
+            # selection_set() fires <<TreeviewSelect>> via Tk's event queue, not
+            # synchronously, so on_holding_selected hasn't run by the time
+            # refresh_prompts() below executes; write selection state explicitly
+            # instead of relying on the queued event to beat this line.
+            self.holding_view_state.select(selected_symbol)
+            self.refresh_prompts()
         elif not views:
             self.ai_selected_var.set('請先在庫存表選取一檔持股')
 

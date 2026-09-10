@@ -12,6 +12,7 @@ from tkinter import ttk
 
 from app.config import DIVIDEND_SOURCE_CHOICES, MARKET_CHOICES
 from app.db.database import Database
+from app.services.holding_view_state import HoldingViewState
 from app.services.sync_service import SyncService
 from app.settings import SettingsStore
 from app.ui.mixins.ai_workspace import AiWorkspaceMixin
@@ -37,6 +38,7 @@ class PortfolioApp(
     def __init__(self, root: tk.Tk, database: Database) -> None:
         self.root = root
         self.database = database
+        self.holding_view_state = HoldingViewState()
         self.settings_store = SettingsStore()
         self.settings = self.settings_store.load()
         self.sync_service = SyncService(database, settings=self.settings)
@@ -88,7 +90,6 @@ class PortfolioApp(
         self._dividend_month_groups = {}
         self._dividend_chart_annotation = None
         self._dividend_month_patches: dict[int, list] = {}
-        self._holding_view_by_symbol: dict[str, object] = {}
 
         self._build_style()
         self._build_layout()
