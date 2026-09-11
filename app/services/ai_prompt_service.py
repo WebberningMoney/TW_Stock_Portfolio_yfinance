@@ -6,6 +6,7 @@ from datetime import date
 
 from app.services.dividend_service import PENDING, REALIZED, DividendProjection
 from app.services.portfolio_service import HoldingView
+from app.utils import market_label
 
 
 def build_news_prompt(view: HoldingView, today: date) -> str:
@@ -27,7 +28,6 @@ def build_news_prompt(view: HoldingView, today: date) -> str:
 def build_analysis_prompt(
     view: HoldingView,
     dividend_projections: list[DividendProjection],
-    market_label: str,
 ) -> str:
     selected_dividends = [
         item for item in dividend_projections
@@ -45,7 +45,7 @@ def build_analysis_prompt(
         '請以台股投資研究員角度，根據下列持股資料及最新可查證資訊，'
         '評估加倉、續抱、減倉或等待的條件。請勿只給單一結論，並避免保證報酬。\n\n'
         f'標的：{view.stock_code} {view.stock_name}（{view.symbol}）\n'
-        f'市場：{market_label}\n'
+        f'市場：{market_label(view.market_segment)}\n'
         f'持有股數：{view.shares:,} 股\n'
         f'總成本：NT$ {view.total_cost:,.0f}\n'
         f'平均成本：NT$ {view.average_cost:,.2f}\n'
