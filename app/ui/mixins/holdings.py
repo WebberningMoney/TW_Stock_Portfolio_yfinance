@@ -32,15 +32,10 @@ from app.services.dividend_service import (
 )
 from app.services.portfolio_service import summarize_portfolio
 from app.ui.universe_dialog import UniverseSelectionDialog
-from app.utils import decimal, money, normalize_stock_code, percent
+from app.utils import decimal, market_label, money, normalize_stock_code, percent
 
 
 class HoldingsMixin:
-    @staticmethod
-    def _market_label(market_key: str) -> str:
-        """將資料庫內部市場代碼轉成中文顯示。"""
-        return MARKET_CHOICES.get(market_key, market_key or MARKET_CHOICES['AUTO'])
-
     def _selected_market_key(self) -> str:
         """將下拉選單中文顯示值轉回內部代碼。"""
         value = self.market_var.get().strip()
@@ -99,7 +94,7 @@ class HoldingsMixin:
         self.stock_name_var.set(instrument.name)
         if self._selected_market_key() == 'AUTO':
             self.market_var.set(
-                self._market_label(instrument.market_segment)
+                market_label(instrument.market_segment)
             )
         self.status_var.set(
             f'已辨識：{instrument.stock_code} {instrument.name}'
@@ -325,7 +320,7 @@ class HoldingsMixin:
         self.market_var.set(
             market_value
             if market_value in MARKET_LABEL_TO_KEY
-            else self._market_label(market_value)
+            else market_label(market_value)
         )
         self.shares_var.set(str(values[4]).replace(',', ''))
         self.total_cost_var.set(str(values[5]).replace(',', ''))
@@ -392,7 +387,7 @@ class HoldingsMixin:
                 if query in item.symbol.casefold()
                 or query in item.stock_code.casefold()
                 or query in item.stock_name.casefold()
-                or query in self._market_label(item.market_segment).casefold()
+                or query in market_label(item.market_segment).casefold()
             ]
         if hasattr(self, 'holding_count_var'):
             self.holding_count_var.set(
@@ -426,7 +421,7 @@ class HoldingsMixin:
                     view.symbol,
                     view.stock_code,
                     view.stock_name,
-                    self._market_label(view.market_segment),
+                    market_label(view.market_segment),
                     f'{view.shares:,}',
                     money(view.total_cost),
                     decimal(view.average_cost),

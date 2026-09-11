@@ -32,7 +32,7 @@ from app.services.dividend_service import (
 )
 from app.services.portfolio_service import build_holding_views, summarize_portfolio
 from app.ui.universe_dialog import UniverseSelectionDialog
-from app.utils import decimal, money, normalize_stock_code, percent
+from app.utils import decimal, market_label, money, normalize_stock_code, percent
 
 
 class LoadedDataPageMixin:
@@ -195,7 +195,7 @@ class LoadedDataPageMixin:
                 item.product_category,
                 item.product_category,
             )
-            market_text = self._market_label(item.market_segment)
+            market_text = market_label(item.market_segment)
             if not self._matches_search(
                 query,
                 item.symbol,

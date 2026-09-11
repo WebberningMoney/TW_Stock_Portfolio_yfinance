@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Iterable, Iterator, TypeVar
 
+from app.config import MARKET_CHOICES
+
 T = TypeVar('T')
 
 
@@ -30,6 +32,11 @@ def market_from_symbol(symbol: str) -> str:
     if upper.endswith('.TWO'):
         return 'TPEX'
     return 'AUTO'
+
+
+def market_label(market_key: str) -> str:
+    """將資料庫內部市場代碼轉成中文顯示。"""
+    return MARKET_CHOICES.get(market_key, market_key or MARKET_CHOICES['AUTO'])
 
 
 def build_symbol(stock_code: str, market_segment: str) -> str:
