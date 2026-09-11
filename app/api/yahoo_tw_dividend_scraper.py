@@ -21,6 +21,7 @@ from app.models import CorporateAction, Instrument
 from app.settings import RuntimeSettings
 
 ProgressCallback = Callable[[str, int | None, int | None], None]
+DividendPageTransport = Callable[[str, int], str]
 
 _PERIOD_RE = re.compile(
     r'^\d{4}(?:\s*[-/]?\s*(?:Q[1-4]|H[12]))?$',
@@ -294,9 +295,14 @@ def parse_dividend_html(
 class YahooTwDividendScraper:
     """低頻率抓取已登錄持股的 Yahoo 台灣股利政策頁。"""
 
-    def __init__(self, settings: RuntimeSettings | None = None) -> None:
+    def __init__(
+        self,
+        settings: RuntimeSettings | None = None,
+        transport: DividendPageTransport | None = None,
+    ) -> None:
         self.settings = (settings or RuntimeSettings()).normalized()
         self._thread_local = threading.local()
+        self._transport = transport
 
     def _create_session(self) -> requests.Session:
         session = requests.Session()
@@ -318,6 +324,11 @@ class YahooTwDividendScraper:
             self._thread_local.session = session
         return session
 
+    def _default_transport(self, url: str, timeout: int) -> str:
+        response = self._get_session().get(url, timeout=timeout)
+        response.raise_for_status()
+        return response.text
+
     def update_settings(self, settings: RuntimeSettings) -> None:
         self.settings = settings.normalized()
 
@@ -332,6 +343,7 @@ class YahooTwDividendScraper:
         除息日、現金發放日與所屬期間；不會抓新聞或其他頁面。
         """
         url = YAHOO_TW_DIVIDEND_PAGE.format(symbol=instrument.symbol)
+        transport = self._transport or self._default_transport
         last_error: Exception | None = None
 
         for attempt in range(1, self.settings.item_retries + 1):
@@ -344,14 +356,10 @@ class YahooTwDividendScraper:
                         attempt,
                         self.settings.item_retries,
                     )
-                response = self._get_session().get(
-                    url,
-                    timeout=self.settings.scraper_timeout_seconds,
-                )
-                response.raise_for_status()
-                actions = parse_dividend_html(response.text, instrument)
+                html_text = transport(url, self.settings.scraper_timeout_seconds)
+                actions = parse_dividend_html(html_text, instrument)
 
-                if not actions and '歷年股利政策' not in response.text:
+                if not actions and '歷年股利政策' not in html_text:
                     raise YahooTwScraperError(
                         '頁面內容不完整，可能被限流或頁面結構已改版'
                     )
@@ -386,4 +394,4 @@ class YahooTwDividendScraper:
         raise YahooTwScraperError(
             f'{instrument.symbol} 股利政策頁重試 '
             f'{self.settings.item_retries} 次仍失敗：{last_error}'
-        )
+        ) from last_error
