@@ -3,7 +3,7 @@
 import unittest
 from datetime import date
 
-from app.models import CorporateAction, Holding
+from app.models import CorporateAction, Holding, MarketQuote
 from app.services.dividend_service import (
     PENDING,
     REALIZED,
@@ -19,6 +19,22 @@ from app.services.portfolio_service import (
 
 
 class ServiceTests(unittest.TestCase):
+    def _quote(self, symbol='0050.TW', close=160.0, trade_date='2026-07-10', **overrides):
+        defaults = dict(
+            symbol=symbol,
+            stock_code='0050',
+            name='元大台灣50',
+            close=close,
+            previous_close=close,
+            change=0.0,
+            change_percent=0.0,
+            volume=0.0,
+            trade_date=trade_date,
+            currency='TWD',
+        )
+        defaults.update(overrides)
+        return MarketQuote(**defaults)
+
     def test_portfolio_calculation(self):
         holding = Holding(
             None,
@@ -31,7 +47,7 @@ class ServiceTests(unittest.TestCase):
         )
         views = build_holding_views(
             [holding],
-            {'0050.TW': {'close': 160.0, 'trade_date': '2026-07-10'}},
+            {'0050.TW': self._quote()},
         )
         self.assertEqual(views[0].market_value, 160000.0)
         self.assertAlmostEqual(views[0].return_rate, 6.666666, places=4)

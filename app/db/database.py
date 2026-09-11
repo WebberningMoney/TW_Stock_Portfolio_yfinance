@@ -364,10 +364,15 @@ class Database:
                 ],
             )
 
-    def get_quote_map(self) -> dict[str, dict]:
+    def get_quote_map(self) -> dict[str, MarketQuote]:
         with self._connect() as connection:
-            rows = connection.execute('SELECT * FROM market_quotes').fetchall()
-        return {row['symbol']: dict(row) for row in rows}
+            rows = connection.execute(
+                '''SELECT symbol, stock_code, name, close, previous_close,
+                          change_value AS change, change_percent, volume,
+                          trade_date, currency
+                   FROM market_quotes'''
+            ).fetchall()
+        return {row['symbol']: MarketQuote(**dict(row)) for row in rows}
 
     def list_quotes(self) -> list[dict]:
         with self._connect() as connection:

@@ -2,7 +2,7 @@
 
 import unittest
 
-from app.models import Holding
+from app.models import Holding, MarketQuote
 from app.services.holding_view_state import HoldingViewState
 
 
@@ -10,11 +10,27 @@ class HoldingViewStateTests(unittest.TestCase):
     def _holding(self, symbol='0050.TW', code='0050'):
         return Holding(None, code, symbol, '元大台灣50', 'TWSE', 1000, 150000.0)
 
+    def _quote(self, symbol='0050.TW', close=160.0, trade_date='2026-07-10', **overrides):
+        defaults = dict(
+            symbol=symbol,
+            stock_code='0050',
+            name='元大台灣50',
+            close=close,
+            previous_close=close,
+            change=0.0,
+            change_percent=0.0,
+            volume=0.0,
+            trade_date=trade_date,
+            currency='TWD',
+        )
+        defaults.update(overrides)
+        return MarketQuote(**defaults)
+
     def test_refresh_builds_cache_from_holdings_and_quotes(self):
         state = HoldingViewState()
         state.refresh(
             [self._holding()],
-            {'0050.TW': {'close': 160.0, 'trade_date': '2026-07-10'}},
+            {'0050.TW': self._quote()},
         )
         view = state.get('0050.TW')
         self.assertIsNotNone(view)
@@ -34,7 +50,7 @@ class HoldingViewStateTests(unittest.TestCase):
         state = HoldingViewState()
         state.refresh(
             [self._holding()],
-            {'0050.TW': {'close': 160.0, 'trade_date': '2026-07-10'}},
+            {'0050.TW': self._quote()},
         )
         state.select('0050.TW')
         view = state.selected()
@@ -45,7 +61,7 @@ class HoldingViewStateTests(unittest.TestCase):
         state = HoldingViewState()
         state.refresh(
             [self._holding()],
-            {'0050.TW': {'close': 160.0, 'trade_date': '2026-07-10'}},
+            {'0050.TW': self._quote()},
         )
         state.select('0050.TW')
         state.select(None)
@@ -56,8 +72,8 @@ class HoldingViewStateTests(unittest.TestCase):
         state.refresh(
             [self._holding('0050.TW', '0050'), self._holding('0056.TW', '0056')],
             {
-                '0050.TW': {'close': 160.0, 'trade_date': '2026-07-10'},
-                '0056.TW': {'close': 30.0, 'trade_date': '2026-07-10'},
+                '0050.TW': self._quote('0050.TW', close=160.0),
+                '0056.TW': self._quote('0056.TW', close=30.0),
             },
         )
         symbols = [view.symbol for view in state.views()]
@@ -67,7 +83,7 @@ class HoldingViewStateTests(unittest.TestCase):
         state = HoldingViewState()
         state.refresh(
             [self._holding()],
-            {'0050.TW': {'close': 160.0, 'trade_date': '2026-07-10'}},
+            {'0050.TW': self._quote()},
         )
         state.select('0050.TW')
         state.refresh([self._holding('0056.TW', '0056')], {})

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 
-from app.models import Holding
+from app.models import Holding, MarketQuote
 from app.services.portfolio_service import HoldingView, build_holding_views
 
 
@@ -11,7 +11,7 @@ class HoldingViewState:
     _views_by_symbol: dict[str, HoldingView] = field(default_factory=dict)
     _selected_symbol: str | None = None
 
-    def refresh(self, holdings: list[Holding], quotes: dict[str, dict]) -> None:
+    def refresh(self, holdings: list[Holding], quotes: dict[str, MarketQuote]) -> None:
         views = build_holding_views(holdings, quotes)
         self._views_by_symbol = {view.symbol: view for view in views}
 

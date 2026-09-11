@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from app.models import Holding
+from app.models import Holding, MarketQuote
 
 
 @dataclass(slots=True)
@@ -31,12 +31,12 @@ class PortfolioSummary:
 
 def build_holding_views(
     holdings: list[Holding],
-    quote_map: dict[str, dict],
+    quote_map: dict[str, MarketQuote],
 ) -> list[HoldingView]:
     result: list[HoldingView] = []
     for holding in holdings:
-        quote = quote_map.get(holding.yahoo_symbol, {})
-        close = float(quote.get('close') or 0.0)
+        quote = quote_map.get(holding.yahoo_symbol)
+        close = quote.close if quote else 0.0
         market_value = close * holding.shares
         profit = market_value - holding.total_cost
         return_rate = profit / holding.total_cost * 100 if holding.total_cost else 0.0
@@ -53,7 +53,7 @@ def build_holding_views(
                 market_value=market_value,
                 profit=profit,
                 return_rate=return_rate,
-                trade_date=str(quote.get('trade_date') or ''),
+                trade_date=quote.trade_date if quote else '',
             )
         )
     return result
