@@ -84,3 +84,33 @@ def test_clear_actions_for_selected_sources(tmp_path):
     remaining = database.list_actions()
     assert len(remaining) == 1
     assert remaining[0].source == 'yahoo_tw_scraper'
+
+
+def test_id_tie_break_uses_insertion_order_not_raw_value_order(tmp_path):
+    """兩筆重複資料完整度、來源都相同時，該保留較晚寫入（id 較大）的
+    那一筆——即使它的原始（未四捨五入）value 剛好比較小，導致 SQL 依
+    value 排序時會被排到較晚寫入的那一筆前面。"""
+    database = Database(tmp_path / 'portfolio.db')
+    database.initialize()
+
+    database.replace_actions_for_symbol(
+        '0050.TW',
+        [
+            CorporateAction(
+                symbol='0050.TW', stock_code='0050', stock_name='元大台灣50',
+                action_date='2026-07-21', action_type='DIVIDEND',
+                value=1.350000004, source='yfinance',
+            ),
+            CorporateAction(
+                symbol='0050.TW', stock_code='0050', stock_name='元大台灣50',
+                action_date='2026-07-21', action_type='DIVIDEND',
+                value=1.350000001, source='yfinance',
+            ),
+        ],
+    )
+
+    database.consolidate_duplicate_actions_for_symbol('0050.TW')
+    actions = database.list_actions('DIVIDEND')
+
+    assert len(actions) == 1
+    assert actions[0].value == 1.350000001
