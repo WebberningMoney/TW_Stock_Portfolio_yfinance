@@ -24,7 +24,7 @@ import importlib.util
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, Protocol
 
 import pandas as pd
 import requests
@@ -58,6 +58,28 @@ from app.utils import (
 ProgressCallback = Callable[[str, int | None, int | None], None]
 
 
+class YFinanceTransport(Protocol):
+    """行情／股利資料的底層網路呼叫縫，涵蓋批次下載與單檔查詢兩種形狀。"""
+
+    def download(self, tickers: list[str], **kwargs: Any) -> pd.DataFrame:
+        """對應 yf.download(tickers=..., **kwargs)。"""
+        ...
+
+    def history(self, symbol: str, **kwargs: Any) -> pd.DataFrame:
+        """對應 yf.Ticker(symbol).history(**kwargs)。"""
+        ...
+
+
+class _DefaultYFinanceTransport:
+    """直接呼叫真正 yfinance 套件的預設實作。"""
+
+    def download(self, tickers: list[str], **kwargs: Any) -> pd.DataFrame:
+        return yf.download(tickers=tickers, **kwargs)
+
+    def history(self, symbol: str, **kwargs: Any) -> pd.DataFrame:
+        return yf.Ticker(symbol).history(**kwargs)
+
+
 class YFinanceApiError(RuntimeError):
     """包裝 Yahoo/yfinance 查詢錯誤。"""
 
@@ -75,8 +97,13 @@ def _emit(
 class YFinanceClient:
     """行情、清冊、名稱與股利／分割資料的網路資料來源。"""
 
-    def __init__(self, settings: RuntimeSettings | None = None) -> None:
+    def __init__(
+        self,
+        settings: RuntimeSettings | None = None,
+        transport: YFinanceTransport | None = None,
+    ) -> None:
         self.settings = (settings or RuntimeSettings()).normalized()
+        self.transport = transport or _DefaultYFinanceTransport()
         YFINANCE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         try:
             yf.set_tz_cache_location(str(YFINANCE_CACHE_DIR))
@@ -790,7 +817,7 @@ class YFinanceClient:
                 len(batches),
             )
             try:
-                data = yf.download(
+                data = self.transport.download(
                     tickers=batch,
                     period=self.settings.quote_period,
                     interval=self.settings.quote_interval,
@@ -852,7 +879,7 @@ class YFinanceClient:
                     None,
                 )
                 try:
-                    data = yf.download(
+                    data = self.transport.download(
                         tickers=[symbol],
                         period=self.settings.quote_period,
                         interval=self.settings.quote_interval,
@@ -1001,7 +1028,7 @@ class YFinanceClient:
                 len(batches) or 1,
             )
             try:
-                data = yf.download(
+                data = self.transport.download(
                     tickers=batch,
                     interval='1d',
                     group_by='ticker',
@@ -1087,7 +1114,8 @@ class YFinanceClient:
     ) -> list[CorporateAction]:
         """取得設定範圍內的歷史股利與股票分割。"""
         try:
-            history = yf.Ticker(instrument.symbol).history(
+            history = self.transport.history(
+                instrument.symbol,
                 interval='1d',
                 auto_adjust=False,
                 actions=True,
