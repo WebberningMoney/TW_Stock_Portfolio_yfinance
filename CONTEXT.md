@@ -23,3 +23,7 @@ _Avoid_: current holding, active row
 **Holding View State**:
 The current cache of Holding Views together with the Selection.
 _Avoid_: view cache, selected holding dict
+
+**Corporate Action**:
+A cash dividend or stock split event for a security, from either yfinance or the Yahoo TW scraper.
+_Avoid_: action, event, distribution
