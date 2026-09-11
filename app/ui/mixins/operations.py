@@ -32,6 +32,7 @@ from app.services.dividend_service import (
     summarize_year,
 )
 from app.services.portfolio_service import build_holding_views, summarize_portfolio
+from app.services.sync_service import SyncStep
 from app.ui.universe_dialog import UniverseSelectionDialog
 from app.utils import decimal, money, normalize_stock_code, percent
 
@@ -144,11 +145,12 @@ class OperationsMixin:
         message: str,
         current: int | None = None,
         total: int | None = None,
+        step: SyncStep | None = None,
     ) -> None:
         self.root.after(
             0,
-            lambda m=message, c=current, t=total: (
-                self._apply_progress(m, c, t)
+            lambda m=message, c=current, t=total, s=step: (
+                self._apply_progress(m, c, t, s)
             ),
         )
 
@@ -157,6 +159,7 @@ class OperationsMixin:
         message: str,
         current: int | None,
         total: int | None,
+        step: SyncStep | None = None,
     ) -> None:
         self.status_var.set(message)
         self.log_status_var.set(message)
