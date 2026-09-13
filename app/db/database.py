@@ -564,7 +564,23 @@ class Database:
                 (sync_type, status, message),
             )
 
-    def export_query_to_csv(self, sql: str, path: Path) -> int:
+    _EXPORT_TABLE_QUERIES = {
+        'instruments': 'SELECT * FROM instruments ORDER BY symbol',
+        'quotes': 'SELECT * FROM market_quotes ORDER BY symbol',
+        'actions': (
+            'SELECT * FROM corporate_actions '
+            'ORDER BY action_date DESC, symbol'
+        ),
+    }
+
+    def export_table_csv(self, table: str, path: Path) -> int:
+        try:
+            sql = self._EXPORT_TABLE_QUERIES[table]
+        except KeyError:
+            raise ValueError(f'Unknown export table: {table!r}') from None
+        return self._export_query_to_csv(sql, path)
+
+    def _export_query_to_csv(self, sql: str, path: Path) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             cursor = connection.execute(sql)

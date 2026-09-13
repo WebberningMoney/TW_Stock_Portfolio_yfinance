@@ -327,22 +327,12 @@ class LoadedDataPageMixin:
     def export_table(self, table: str) -> None:
         EXPORT_DIR.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        defaults = {
-            'instruments': (
-                '商品清冊',
-                'SELECT * FROM instruments ORDER BY symbol',
-            ),
-            'quotes': (
-                '行情',
-                'SELECT * FROM market_quotes ORDER BY symbol',
-            ),
-            'actions': (
-                '股利／分割資料',
-                'SELECT * FROM corporate_actions '
-                'ORDER BY action_date DESC, symbol',
-            ),
+        labels = {
+            'instruments': '商品清冊',
+            'quotes': '行情',
+            'actions': '股利／分割資料',
         }
-        label, sql = defaults[table]
+        label = labels[table]
         suggested = EXPORT_DIR / f'{table}_{timestamp}.csv'
         path_text = filedialog.asksaveasfilename(
             title=f'匯出{label}',
@@ -353,8 +343,8 @@ class LoadedDataPageMixin:
         )
         if not path_text:
             return
-        count = self.database.export_query_to_csv(
-            sql, Path(path_text)
+        count = self.database.export_table_csv(
+            table, Path(path_text)
         )
         messagebox.showinfo(
             '匯出完成',
