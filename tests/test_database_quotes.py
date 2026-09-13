@@ -39,6 +39,38 @@ class DatabaseQuoteMapTests(unittest.TestCase):
             self.assertEqual(quote.change, 2.5)
             self.assertEqual(quote.trade_date, '2026-07-10')
 
+    def test_list_quotes_round_trips_as_market_quote_list(self):
+        with TemporaryDirectory() as tmp:
+            database = Database(Path(tmp) / 'portfolio.db')
+            database.initialize()
+
+            database.upsert_quotes([self._quote()])
+            quotes = database.list_quotes()
+
+            self.assertEqual(len(quotes), 1)
+            quote = quotes[0]
+            self.assertIsInstance(quote, MarketQuote)
+            self.assertEqual(quote.close, 160.0)
+            self.assertEqual(quote.change, 2.5)
+            self.assertEqual(quote.trade_date, '2026-07-10')
+
+    def test_list_quotes_orders_by_symbol(self):
+        with TemporaryDirectory() as tmp:
+            database = Database(Path(tmp) / 'portfolio.db')
+            database.initialize()
+
+            database.upsert_quotes([
+                self._quote(symbol='0056.TW', stock_code='0056'),
+                self._quote(symbol='0050.TW', stock_code='0050'),
+                self._quote(symbol='2330.TW', stock_code='2330'),
+            ])
+            quotes = database.list_quotes()
+
+            self.assertEqual(
+                [quote.symbol for quote in quotes],
+                ['0050.TW', '0056.TW', '2330.TW'],
+            )
+
 
 if __name__ == '__main__':
     unittest.main()

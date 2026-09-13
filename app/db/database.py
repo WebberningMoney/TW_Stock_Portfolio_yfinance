@@ -375,12 +375,16 @@ class Database:
             ).fetchall()
         return {row['symbol']: MarketQuote(**dict(row)) for row in rows}
 
-    def list_quotes(self) -> list[dict]:
+    def list_quotes(self) -> list[MarketQuote]:
         with self._connect() as connection:
             rows = connection.execute(
-                'SELECT * FROM market_quotes ORDER BY symbol'
+                '''SELECT symbol, stock_code, name, close, previous_close,
+                          change_value AS change, change_percent, volume,
+                          trade_date, currency
+                   FROM market_quotes
+                   ORDER BY symbol'''
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [MarketQuote(**dict(row)) for row in rows]
 
     @staticmethod
     def _action_values(actions: list[CorporateAction]) -> list[tuple]:

@@ -226,36 +226,35 @@ class LoadedDataPageMixin:
             )
 
         quote_count = 0
-        for row in self._loaded_quotes:
+        for item in self._loaded_quotes:
             if not self._matches_search(
                 query,
-                row['symbol'],
-                row['stock_code'],
-                row['name'],
-                row['close'],
-                row['trade_date'],
+                item.symbol,
+                item.stock_code,
+                item.name,
+                item.close,
+                item.trade_date,
             ):
                 continue
             quote_count += 1
-            change_value = float(row.get('change_value') or 0.0)
             quote_tag = (
-                'positive' if change_value > 0
-                else 'negative' if change_value < 0
+                'positive' if item.change > 0
+                else 'negative' if item.change < 0
                 else 'neutral'
             )
             self.quote_tree.insert(
                 '',
                 'end',
                 values=(
-                    row['symbol'],
-                    row['stock_code'],
-                    row['name'],
-                    decimal(row['close']),
-                    decimal(row['previous_close']),
-                    decimal(row['change_value']),
-                    percent(row['change_percent']),
-                    f"{row['volume']:,.0f}",
-                    row['trade_date'],
+                    item.symbol,
+                    item.stock_code,
+                    item.name,
+                    decimal(item.close),
+                    decimal(item.previous_close),
+                    decimal(item.change),
+                    percent(item.change_percent),
+                    f'{item.volume:,.0f}',
+                    item.trade_date,
                 ),
                 tags=(quote_tag,),
             )

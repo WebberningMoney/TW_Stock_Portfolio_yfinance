@@ -12,6 +12,7 @@ from tkinter import ttk
 
 from app.config import DIVIDEND_SOURCE_CHOICES, MARKET_CHOICES
 from app.db.database import Database
+from app.models import MarketQuote
 from app.services.holding_view_state import HoldingViewState
 from app.services.sync_service import SyncService
 from app.settings import SettingsStore
@@ -84,7 +85,7 @@ class PortfolioApp(
         self.ai_selected_var = tk.StringVar(value='請先在庫存表選取一檔持股')
 
         self._loaded_instruments = []
-        self._loaded_quotes: list[dict] = []
+        self._loaded_quotes: list[MarketQuote] = []
         self._loaded_actions = []
         self._dividend_projections = []
         self._dividend_month_groups = {}
