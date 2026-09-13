@@ -14,6 +14,8 @@ Commit messages, code comments, PR descriptions, README.md, other project docume
 
 The architecture scan report (HTML) produced by /improve-codebase-architecture must also have its prose (Problem, Solution, Benefits, Before/After explanations, Top recommendation, etc.) written in Traditional Chinese. Architecture vocabulary defined by the codebase-design skill (module, interface, seam, adapter, etc.) stays in English, untranslated.
 
+Live interactive communication with the user — grilling Q&A, discussion, confirmation messages, and any other real-time back-and-forth — must also be in Traditional Chinese. Code identifiers and architecture vocabulary (module, interface, seam, etc.) stay in English, untranslated, even inside otherwise-Chinese sentences.
+
 ### Keeping README.md in sync
 
 When a change affects user-visible functionality or how users operate the app, or when cutting a release (version bump), update README.md to reflect the current behavior. Purely internal refactors, test-only additions, and other changes with no user-visible effect don't require a README.md update.
