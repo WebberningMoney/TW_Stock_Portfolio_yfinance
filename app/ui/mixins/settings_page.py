@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
@@ -12,6 +14,67 @@ from app.config import (
     SINGLE_TEST_LABEL_TO_KEY,
 )
 from app.settings import RuntimeSettings
+
+
+def _format_float(value: object) -> str:
+    return f'{value:g}'
+
+
+@dataclass(frozen=True, slots=True)
+class _SettingField:
+    """RuntimeSettings 欄位跟表單變數之間的對應規則。"""
+
+    name: str
+    var_name: str
+    parse: Callable[[str], object]
+    format: Callable[[object], str]
+
+
+_SETTING_FIELDS: tuple[_SettingField, ...] = (
+    _SettingField('screener_page_size', 'setting_screener_page_size_var', int, str),
+    _SettingField('screener_max_pages', 'setting_screener_max_pages_var', int, str),
+    _SettingField('quote_batch_size', 'setting_quote_batch_var', int, str),
+    _SettingField('quote_period', 'setting_quote_period_var', str, str),
+    _SettingField('quote_interval', 'setting_quote_interval_var', str, str),
+    _SettingField('download_threads', 'setting_threads_var', int, str),
+    _SettingField(
+        'yfinance_timeout_seconds', 'setting_yfinance_timeout_var', int, str
+    ),
+    _SettingField(
+        'quote_batch_delay_seconds',
+        'setting_quote_delay_var',
+        float,
+        _format_float,
+    ),
+    _SettingField('action_period', 'setting_action_period_var', str, str),
+    _SettingField('action_batch_size', 'setting_action_batch_var', int, str),
+    _SettingField(
+        'action_download_threads', 'setting_action_threads_var', int, str
+    ),
+    _SettingField(
+        'action_item_delay_seconds',
+        'setting_action_delay_var',
+        float,
+        _format_float,
+    ),
+    _SettingField('scraper_workers', 'setting_scraper_workers_var', int, str),
+    _SettingField(
+        'scraper_delay_seconds',
+        'setting_scraper_delay_var',
+        float,
+        _format_float,
+    ),
+    _SettingField(
+        'scraper_timeout_seconds', 'setting_scraper_timeout_var', int, str
+    ),
+    _SettingField('item_retries', 'setting_retries_var', int, str),
+    _SettingField(
+        'retry_backoff_seconds',
+        'setting_backoff_var',
+        float,
+        _format_float,
+    ),
+)
 
 
 class SettingsPageMixin:
@@ -50,51 +113,14 @@ class SettingsPageMixin:
 
     def _init_settings_variables(self) -> None:
         settings = self.settings
-        self.setting_screener_page_size_var = tk.StringVar(
-            value=str(settings.screener_page_size)
-        )
-        self.setting_screener_max_pages_var = tk.StringVar(
-            value=str(settings.screener_max_pages)
-        )
-        self.setting_quote_batch_var = tk.StringVar(
-            value=str(settings.quote_batch_size)
-        )
-        self.setting_quote_period_var = tk.StringVar(value=settings.quote_period)
-        self.setting_quote_interval_var = tk.StringVar(value=settings.quote_interval)
-        self.setting_threads_var = tk.StringVar(
-            value=str(settings.download_threads)
-        )
-        self.setting_yfinance_timeout_var = tk.StringVar(
-            value=str(settings.yfinance_timeout_seconds)
-        )
-        self.setting_quote_delay_var = tk.StringVar(
-            value=f'{settings.quote_batch_delay_seconds:g}'
-        )
+        for field in _SETTING_FIELDS:
+            setattr(
+                self,
+                field.var_name,
+                tk.StringVar(value=field.format(getattr(settings, field.name))),
+            )
         self.setting_repair_var = tk.BooleanVar(
             value=settings.enable_price_repair
-        )
-        self.setting_action_period_var = tk.StringVar(value=settings.action_period)
-        self.setting_action_batch_var = tk.StringVar(
-            value=str(settings.action_batch_size)
-        )
-        self.setting_action_threads_var = tk.StringVar(
-            value=str(settings.action_download_threads)
-        )
-        self.setting_action_delay_var = tk.StringVar(
-            value=f'{settings.action_item_delay_seconds:g}'
-        )
-        self.setting_scraper_workers_var = tk.StringVar(
-            value=str(settings.scraper_workers)
-        )
-        self.setting_scraper_delay_var = tk.StringVar(
-            value=f'{settings.scraper_delay_seconds:g}'
-        )
-        self.setting_scraper_timeout_var = tk.StringVar(
-            value=str(settings.scraper_timeout_seconds)
-        )
-        self.setting_retries_var = tk.StringVar(value=str(settings.item_retries))
-        self.setting_backoff_var = tk.StringVar(
-            value=f'{settings.retry_backoff_seconds:g}'
         )
 
         self.single_test_symbol_var = tk.StringVar(value='0050.TW')
@@ -331,26 +357,14 @@ class SettingsPageMixin:
             self.dividend_source_var.get(),
             'BOTH',
         )
+        field_values = {
+            field.name: field.parse(getattr(self, field.var_name).get())
+            for field in _SETTING_FIELDS
+        }
         return RuntimeSettings(
             dividend_source_mode=source_mode,
-            screener_page_size=int(self.setting_screener_page_size_var.get()),
-            screener_max_pages=int(self.setting_screener_max_pages_var.get()),
-            quote_batch_size=int(self.setting_quote_batch_var.get()),
-            quote_period=self.setting_quote_period_var.get(),
-            quote_interval=self.setting_quote_interval_var.get(),
-            download_threads=int(self.setting_threads_var.get()),
-            yfinance_timeout_seconds=int(self.setting_yfinance_timeout_var.get()),
-            quote_batch_delay_seconds=float(self.setting_quote_delay_var.get()),
             enable_price_repair=bool(self.setting_repair_var.get()),
-            action_period=self.setting_action_period_var.get(),
-            action_batch_size=int(self.setting_action_batch_var.get()),
-            action_download_threads=int(self.setting_action_threads_var.get()),
-            action_item_delay_seconds=float(self.setting_action_delay_var.get()),
-            scraper_workers=int(self.setting_scraper_workers_var.get()),
-            scraper_delay_seconds=float(self.setting_scraper_delay_var.get()),
-            scraper_timeout_seconds=int(self.setting_scraper_timeout_var.get()),
-            item_retries=int(self.setting_retries_var.get()),
-            retry_backoff_seconds=float(self.setting_backoff_var.get()),
+            **field_values,
         ).normalized()
 
     def remember_dividend_source(self) -> None:
@@ -388,27 +402,10 @@ class SettingsPageMixin:
 
     def _reload_settings_form(self) -> None:
         settings = self.settings
-        values = {
-            self.setting_screener_page_size_var: settings.screener_page_size,
-            self.setting_screener_max_pages_var: settings.screener_max_pages,
-            self.setting_quote_batch_var: settings.quote_batch_size,
-            self.setting_quote_period_var: settings.quote_period,
-            self.setting_quote_interval_var: settings.quote_interval,
-            self.setting_threads_var: settings.download_threads,
-            self.setting_yfinance_timeout_var: settings.yfinance_timeout_seconds,
-            self.setting_quote_delay_var: settings.quote_batch_delay_seconds,
-            self.setting_action_period_var: settings.action_period,
-            self.setting_action_batch_var: settings.action_batch_size,
-            self.setting_action_threads_var: settings.action_download_threads,
-            self.setting_action_delay_var: settings.action_item_delay_seconds,
-            self.setting_scraper_workers_var: settings.scraper_workers,
-            self.setting_scraper_delay_var: settings.scraper_delay_seconds,
-            self.setting_scraper_timeout_var: settings.scraper_timeout_seconds,
-            self.setting_retries_var: settings.item_retries,
-            self.setting_backoff_var: settings.retry_backoff_seconds,
-        }
-        for variable, value in values.items():
-            variable.set(str(value))
+        for field in _SETTING_FIELDS:
+            getattr(self, field.var_name).set(
+                field.format(getattr(settings, field.name))
+            )
         self.setting_repair_var.set(settings.enable_price_repair)
 
     def run_single_test_async(self) -> None:
