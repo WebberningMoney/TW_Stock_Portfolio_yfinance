@@ -79,6 +79,20 @@ class HoldingViewStateTests(unittest.TestCase):
         symbols = [view.symbol for view in state.views()]
         self.assertEqual(symbols, ['0050.TW', '0056.TW'])
 
+    def test_holdings_returns_raw_holdings_passed_to_refresh(self):
+        state = HoldingViewState()
+        holdings = [self._holding('0050.TW', '0050'), self._holding('0056.TW', '0056')]
+        state.refresh(holdings, {})
+        symbols = [holding.yahoo_symbol for holding in state.holdings()]
+        self.assertEqual(symbols, ['0050.TW', '0056.TW'])
+
+    def test_holdings_returns_a_copy_not_the_internal_list(self):
+        state = HoldingViewState()
+        state.refresh([self._holding()], {})
+        result = state.holdings()
+        result.append(self._holding('0056.TW', '0056'))
+        self.assertEqual(len(state.holdings()), 1)
+
     def test_refresh_drops_selection_target_if_symbol_no_longer_present(self):
         state = HoldingViewState()
         state.refresh(

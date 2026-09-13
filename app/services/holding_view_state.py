@@ -9,11 +9,13 @@ from app.services.portfolio_service import HoldingView, build_holding_views
 @dataclass(slots=True)
 class HoldingViewState:
     _views_by_symbol: dict[str, HoldingView] = field(default_factory=dict)
+    _holdings: list[Holding] = field(default_factory=list)
     _selected_symbol: str | None = None
 
     def refresh(self, holdings: list[Holding], quotes: dict[str, MarketQuote]) -> None:
         views = build_holding_views(holdings, quotes)
         self._views_by_symbol = {view.symbol: view for view in views}
+        self._holdings = list(holdings)
 
     def select(self, symbol: str | None) -> None:
         self._selected_symbol = symbol
@@ -28,3 +30,6 @@ class HoldingViewState:
 
     def views(self) -> list[HoldingView]:
         return list(self._views_by_symbol.values())
+
+    def holdings(self) -> list[Holding]:
+        return list(self._holdings)

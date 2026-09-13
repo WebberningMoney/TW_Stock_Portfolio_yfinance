@@ -21,7 +21,6 @@ from app.config import (
     MARKET_LABEL_TO_KEY,
     UNIVERSE_CATEGORY_CHOICES,
 )
-from app.models import Holding
 from app.services.dividend_service import (
     PENDING,
     REALIZED,
@@ -305,7 +304,7 @@ class DividendPageMixin:
             return
 
         projections = build_dividend_projection(
-            self.database.list_holdings(),
+            self.holding_view_state.holdings(),
             self.database.list_actions('DIVIDEND'),
             target_year,
         )
