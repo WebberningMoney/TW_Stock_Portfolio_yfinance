@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import math
-import re
 import threading
 import tkinter as tk
 import webbrowser
-from datetime import date, datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
@@ -34,7 +32,7 @@ from app.services.dividend_service import (
 )
 from app.services.portfolio_service import build_holding_views, summarize_portfolio
 from app.ui.universe_dialog import UniverseSelectionDialog
-from app.utils import decimal, money, normalize_stock_code, percent
+from app.utils import decimal, money, normalize_stock_code, percent, tree_sort_key
 
 
 class LayoutMixin:
@@ -371,35 +369,6 @@ class LayoutMixin:
         )
         return tree
 
-    @staticmethod
-    def _tree_sort_key(value: object) -> tuple[int, object]:
-        """
-        將表格顯示文字轉成適合排序的值。
-
-        支援金額、百分比、一般數字、YYYY-MM-DD／YYYY-MM 日期與文字。
-        """
-        text = str(value).strip()
-        if text in {'', '-', '未更新', '未提供'}:
-            return (9, '')
-
-        number_text = (
-            text.replace('NT$', '')
-            .replace(',', '')
-            .replace('%', '')
-            .replace('元', '')
-            .strip()
-        )
-        if re.fullmatch(r'[-+]?\d+(?:\.\d+)?', number_text):
-            return (0, float(number_text))
-
-        for format_text in ('%Y-%m-%d', '%Y/%m/%d', '%Y-%m', '%Y/%m'):
-            try:
-                return (1, datetime.strptime(text, format_text))
-            except ValueError:
-                continue
-
-        return (2, text.casefold())
-
     def _sort_treeview(self, tree: ttk.Treeview, column: str) -> None:
         """按欄位標題切換升冪／降冪，空白資料固定放在最後。"""
         reverse_map = getattr(tree, '_sort_reverse', {})
@@ -409,7 +378,7 @@ class LayoutMixin:
         empty = []
         for item_id in tree.get_children(''):
             value = tree.set(item_id, column)
-            key = self._tree_sort_key(value)
+            key = tree_sort_key(value)
             if key[0] == 9:
                 empty.append((key, item_id))
             else:

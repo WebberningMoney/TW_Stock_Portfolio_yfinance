@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Iterable, Iterator, TypeVar
 
@@ -87,3 +88,32 @@ def decimal(value: float, digits: int = 2) -> str:
 
 def percent(value: float) -> str:
     return f'{value:,.2f}%'
+
+
+def tree_sort_key(value: object) -> tuple[int, object]:
+    """
+    將表格顯示文字轉成適合排序的值。
+
+    支援金額、百分比、一般數字、YYYY-MM-DD／YYYY-MM 日期與文字。
+    """
+    text = str(value).strip()
+    if text in {'', '-', '未更新', '未提供'}:
+        return (9, '')
+
+    number_text = (
+        text.replace('NT$', '')
+        .replace(',', '')
+        .replace('%', '')
+        .replace('元', '')
+        .strip()
+    )
+    if re.fullmatch(r'[-+]?\d+(?:\.\d+)?', number_text):
+        return (0, float(number_text))
+
+    for format_text in ('%Y-%m-%d', '%Y/%m/%d', '%Y-%m', '%Y/%m'):
+        try:
+            return (1, datetime.strptime(text, format_text))
+        except ValueError:
+            continue
+
+    return (2, text.casefold())
