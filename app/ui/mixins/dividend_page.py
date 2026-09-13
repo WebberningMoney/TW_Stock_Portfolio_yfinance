@@ -24,8 +24,10 @@ from app.config import (
 from app.services.dividend_service import (
     PENDING,
     REALIZED,
+    build_dividend_chart_series,
     build_dividend_projection,
     group_month_components,
+    select_legend_series,
     summarize_monthly,
     summarize_quarterly,
     summarize_year,
@@ -444,21 +446,8 @@ class DividendPageMixin:
         month_keys = [item.month for item in monthly]
         x_values = list(range(12))
 
-        symbol_totals: dict[str, float] = {}
-        symbol_names: dict[str, str] = {}
-        for item in projections:
-            symbol_totals[item.symbol] = (
-                symbol_totals.get(item.symbol, 0.0)
-                + item.estimated_amount
-            )
-            symbol_names[item.symbol] = (
-                f'{item.stock_code} {item.stock_name}'
-            )
-        symbols = sorted(
-            symbol_totals,
-            key=symbol_totals.get,
-            reverse=True,
-        )
+        series = build_dividend_chart_series(projections, month_keys)
+        symbols = [item.symbol for item in series]
 
         cmap = colormaps['tab20'].resampled(max(len(symbols), 1))
         symbol_colors = {
@@ -467,19 +456,12 @@ class DividendPageMixin:
         }
         bottoms = [0.0] * 12
 
-        for symbol in symbols:
-            color = symbol_colors[symbol]
-            for status in (REALIZED, PENDING):
-                values = []
-                for month in month_keys:
-                    values.append(sum(
-                        item.estimated_amount
-                        for item in projections
-                        if item.symbol == symbol
-                        and item.month == month
-                        and item.status == status
-                    ))
-
+        for item in series:
+            color = symbol_colors[item.symbol]
+            for status, values in (
+                (REALIZED, item.realized_by_month),
+                (PENDING, item.pending_by_month),
+            ):
                 bars = ax.bar(
                     x_values,
                     values,
@@ -541,24 +523,21 @@ class DividendPageMixin:
 
         # 預設使用單欄；只有實際可用高度不足時才自動增加欄數。
         # 最多顯示 30 檔，其餘以一個彙總項目表示。
-        legend_symbols = symbols[:30]
+        legend_series, legend_overflow = select_legend_series(series, 30)
         legend_handles = [
             Patch(
-                facecolor=symbol_colors[symbol],
+                facecolor=symbol_colors[item.symbol],
                 edgecolor='#475569',
-                label=symbol_names[symbol],
+                label=item.label,
             )
-            for symbol in legend_symbols
+            for item in legend_series
         ]
-        if len(symbols) > len(legend_symbols):
+        if legend_overflow:
             legend_handles.append(
                 Patch(
                     facecolor='#CBD5E1',
                     edgecolor='#64748B',
-                    label=(
-                        f'另有 {len(symbols) - len(legend_symbols)} 檔'
-                        '（詳見月份組成）'
-                    ),
+                    label=f'另有 {legend_overflow} 檔（詳見月份組成）',
                 )
             )
         if symbols:

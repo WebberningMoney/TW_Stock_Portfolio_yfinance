@@ -7,7 +7,11 @@ from app.models import CorporateAction, Holding, MarketQuote
 from app.services.dividend_service import (
     PENDING,
     REALIZED,
+    DividendChartSeries,
+    DividendProjection,
+    build_dividend_chart_series,
     build_dividend_projection,
+    select_legend_series,
     summarize_monthly,
     summarize_quarterly,
     summarize_year,
@@ -234,3 +238,85 @@ class DividendFrequencyForecastTests(unittest.TestCase):
         ])
         self.assertTrue(all(item.dividend_per_share == 0.8 for item in projected))
         self.assertTrue(all('月配' in item.basis for item in projected))
+
+
+class DividendChartSeriesTests(unittest.TestCase):
+    MONTH_KEYS = [f'2026-{month:02d}' for month in range(1, 13)]
+
+    def _projection(
+        self,
+        symbol='0050.TW',
+        stock_code='0050',
+        stock_name='元大台灣50',
+        month='2026-01',
+        status=REALIZED,
+        estimated_amount=1000.0,
+    ):
+        return DividendProjection(
+            month=month,
+            symbol=symbol,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            shares=1000,
+            dividend_per_share=1.0,
+            estimated_amount=estimated_amount,
+            status=status,
+            basis='test',
+            reference_date=f'{month}-01',
+        )
+
+    def test_series_sorted_by_total_descending(self):
+        projections = [
+            self._projection(symbol='A.TW', stock_code='A', stock_name='A', estimated_amount=500.0),
+            self._projection(symbol='B.TW', stock_code='B', stock_name='B', estimated_amount=1500.0),
+        ]
+        series = build_dividend_chart_series(projections, self.MONTH_KEYS)
+        self.assertEqual([item.symbol for item in series], ['B.TW', 'A.TW'])
+
+    def test_tie_break_preserves_first_seen_order(self):
+        projections = [
+            self._projection(symbol='A.TW', stock_code='A', stock_name='A', estimated_amount=500.0),
+            self._projection(symbol='B.TW', stock_code='B', stock_name='B', estimated_amount=500.0),
+        ]
+        series = build_dividend_chart_series(projections, self.MONTH_KEYS)
+        self.assertEqual([item.symbol for item in series], ['A.TW', 'B.TW'])
+
+    def test_realized_and_pending_bucketed_and_aligned_to_month_keys(self):
+        projections = [
+            self._projection(month='2026-01', status=REALIZED, estimated_amount=100.0),
+            self._projection(month='2026-03', status=PENDING, estimated_amount=50.0),
+        ]
+        series = build_dividend_chart_series(projections, self.MONTH_KEYS)
+        item = series[0]
+        self.assertEqual(item.label, '0050 元大台灣50')
+        self.assertEqual(item.total, 150.0)
+        self.assertEqual(item.realized_by_month[0], 100.0)
+        self.assertEqual(item.realized_by_month[2], 0.0)
+        self.assertEqual(item.pending_by_month[2], 50.0)
+        self.assertEqual(item.pending_by_month[0], 0.0)
+
+    def test_empty_projections_returns_empty_list(self):
+        self.assertEqual(build_dividend_chart_series([], self.MONTH_KEYS), [])
+
+    def _series(self, count):
+        return [
+            DividendChartSeries(
+                symbol=f'S{index}',
+                label=f'S{index}',
+                total=float(count - index),
+                realized_by_month=[0.0] * 12,
+                pending_by_month=[0.0] * 12,
+            )
+            for index in range(count)
+        ]
+
+    def test_select_legend_series_no_overflow_at_exact_max(self):
+        visible, overflow = select_legend_series(self._series(30), 30)
+        self.assertEqual(len(visible), 30)
+        self.assertEqual(overflow, 0)
+
+    def test_select_legend_series_overflow_past_max(self):
+        series = self._series(31)
+        visible, overflow = select_legend_series(series, 30)
+        self.assertEqual([item.symbol for item in visible], [item.symbol for item in series[:30]])
+        self.assertEqual(overflow, 1)

@@ -502,3 +502,68 @@ def group_month_components(
     for items in grouped.values():
         items.sort(key=lambda item: item.estimated_amount, reverse=True)
     return dict(grouped)
+
+
+@dataclass(slots=True)
+class DividendChartSeries:
+    """單一持股在股利長條圖裡的一條資料序列。"""
+
+    symbol: str
+    label: str
+    total: float
+    realized_by_month: list[float]
+    pending_by_month: list[float]
+
+
+def build_dividend_chart_series(
+    projections: list[DividendProjection],
+    month_keys: list[str],
+) -> list[DividendChartSeries]:
+    """依股票分組，整理成股利長條圖繪製用的資料序列，依總額降冪排序。"""
+    symbol_totals: dict[str, float] = {}
+    symbol_names: dict[str, str] = {}
+    for item in projections:
+        symbol_totals[item.symbol] = (
+            symbol_totals.get(item.symbol, 0.0) + item.estimated_amount
+        )
+        symbol_names[item.symbol] = f'{item.stock_code} {item.stock_name}'
+
+    symbols = sorted(symbol_totals, key=symbol_totals.get, reverse=True)
+
+    series: list[DividendChartSeries] = []
+    for symbol in symbols:
+        realized_by_month = []
+        pending_by_month = []
+        for month in month_keys:
+            realized_by_month.append(sum(
+                item.estimated_amount
+                for item in projections
+                if item.symbol == symbol
+                and item.month == month
+                and item.status == REALIZED
+            ))
+            pending_by_month.append(sum(
+                item.estimated_amount
+                for item in projections
+                if item.symbol == symbol
+                and item.month == month
+                and item.status == PENDING
+            ))
+        series.append(DividendChartSeries(
+            symbol=symbol,
+            label=symbol_names[symbol],
+            total=symbol_totals[symbol],
+            realized_by_month=realized_by_month,
+            pending_by_month=pending_by_month,
+        ))
+    return series
+
+
+def select_legend_series(
+    series: list[DividendChartSeries],
+    max_shown: int,
+) -> tuple[list[DividendChartSeries], int]:
+    """回傳 legend 要顯示的前 max_shown 檔，以及其餘檔數。"""
+    visible = series[:max_shown]
+    overflow = max(0, len(series) - len(visible))
+    return visible, overflow
