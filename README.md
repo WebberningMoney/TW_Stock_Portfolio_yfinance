@@ -62,7 +62,7 @@ CSV 匯出：    ~/Documents/台股資產與股息管理匯出/
 仍可用原本方式執行：
 
 ```bash
-cd /Users/whuang/Desktop/TW_Stock_Portfolio_yfinance_v2.4
+cd /Users/whuang/Desktop/TW_Stock_Portfolio_yfinance
 /opt/anaconda3/envs/shopee-auto/bin/python -m pip install --upgrade -r requirements.txt
 /opt/anaconda3/envs/shopee-auto/bin/python main.py
 ```
