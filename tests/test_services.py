@@ -58,6 +58,64 @@ class ServiceTests(unittest.TestCase):
         summary = summarize_portfolio(views)
         self.assertEqual(summary.total_profit, 10000.0)
 
+    def test_missing_quote_falls_back_to_zero_close(self):
+        holding = Holding(
+            None,
+            '0050',
+            '0050.TW',
+            '元大台灣50',
+            'TWSE',
+            1000,
+            150000.0,
+        )
+        views = build_holding_views([holding], {})
+        self.assertEqual(views[0].close, 0.0)
+
+    def test_missing_quote_falls_back_to_empty_trade_date(self):
+        holding = Holding(
+            None,
+            '0050',
+            '0050.TW',
+            '元大台灣50',
+            'TWSE',
+            1000,
+            150000.0,
+        )
+        views = build_holding_views([holding], {})
+        self.assertEqual(views[0].trade_date, '')
+
+    def test_zero_total_cost_holding_avoids_division_by_zero(self):
+        holding = Holding(
+            None,
+            '0050',
+            '0050.TW',
+            '元大台灣50',
+            'TWSE',
+            1000,
+            0.0,
+        )
+        views = build_holding_views([holding], {'0050.TW': self._quote()})
+        self.assertEqual(views[0].return_rate, 0.0)
+
+    def test_summarize_portfolio_zero_total_cost_avoids_division_by_zero(self):
+        empty_summary = summarize_portfolio([])
+        self.assertEqual(empty_summary.total_return_rate, 0.0)
+
+        zero_cost_holding = Holding(
+            None,
+            '0050',
+            '0050.TW',
+            '元大台灣50',
+            'TWSE',
+            1000,
+            0.0,
+        )
+        views = build_holding_views(
+            [zero_cost_holding], {'0050.TW': self._quote()}
+        )
+        zero_cost_summary = summarize_portfolio(views)
+        self.assertEqual(zero_cost_summary.total_return_rate, 0.0)
+
     def test_dividend_projection_separates_realized_and_pending(self):
         holding = Holding(
             None,
