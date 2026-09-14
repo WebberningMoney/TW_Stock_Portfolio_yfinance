@@ -3,7 +3,7 @@
 import pytest
 
 from app.db.database import Database
-from app.models import CorporateAction, Holding, Instrument
+from app.models import CorporateAction, Holding, Instrument, MarketQuote
 from app.services.sync_service import SyncService, SyncStep
 from app.settings import RuntimeSettings
 
@@ -15,6 +15,8 @@ class FakeYFinanceClient:
         missing_action_symbols=None,
         failed_action_symbols=None,
         resolve_instrument_results=None,
+        quotes_result=None,
+        discovered_instruments=None,
     ):
         self.actions_by_symbol = actions_by_symbol or {}
         self.missing_action_symbols = set(missing_action_symbols or ())
@@ -23,8 +25,12 @@ class FakeYFinanceClient:
             key: list(value)
             for key, value in (resolve_instrument_results or {}).items()
         }
+        self._quotes_result = quotes_result or ([], [])
+        self._discovered_instruments = list(discovered_instruments or ())
         self.download_actions_calls = 0
         self.resolve_instrument_calls = []
+        self.download_quotes_calls = []
+        self.discover_taiwan_universe_calls = []
 
     def download_actions(self, instruments, progress=None):
         self.download_actions_calls += 1
@@ -52,6 +58,28 @@ class FakeYFinanceClient:
         if isinstance(result, BaseException):
             raise result
         return result
+
+    def download_quotes(self, instruments, progress=None):
+        self.download_quotes_calls.append(list(instruments))
+        if progress:
+            progress(
+                f'[假 yfinance] 行情 {len(instruments)} 檔',
+                len(instruments),
+                len(instruments),
+            )
+        return self._quotes_result
+
+    def discover_taiwan_universe(
+        self, selected_categories, enrich_names=True, progress=None
+    ):
+        self.discover_taiwan_universe_calls.append(
+            (set(selected_categories), enrich_names)
+        )
+        if progress:
+            progress(
+                f'[假探索] {len(self._discovered_instruments)} 檔', None, None
+            )
+        return list(self._discovered_instruments)
 
     def update_settings(self, settings):
         pass
@@ -345,3 +373,154 @@ def test_sync_holding_actions_records_scraper_exception_as_failure(tmp_path):
         if message.startswith('[爬蟲／Yahoo 台灣] 最終失敗：')
     ]
     assert any('0056.TW' in message for message in failure_messages)
+
+
+def test_discover_universe_rebuild_preserves_holding_instrument_and_drops_others(
+    tmp_path,
+):
+    """rebuild=True 會整批清空清冊重建，這裡刻意直接查 database.list_instruments()
+    而不是只看 discover_universe() 的回傳值（只是個數量），因為要防護的是
+    「使用者自選股清冊被誤刪」這種資料層級的後果，只有查實際內容才驗證得到。
+    """
+    database = Database(tmp_path / 'portfolio.db')
+    database.initialize()
+
+    holding_instrument = _instrument('0050.TW', '0050')  # 有持股，理應保留
+    orphan_instrument = _instrument('0056.TW', '0056')  # 沒有持股，理應被新清冊取代
+    database.upsert_instruments([holding_instrument, orphan_instrument])
+    database.upsert_holding(_holding('0050.TW', '0050'))
+
+    new_instrument = Instrument(symbol='2330.TW', stock_code='2330', name='台積電')
+    client = FakeYFinanceClient(discovered_instruments=[new_instrument])
+    scraper = FakeDividendScraper()
+    service = SyncService(
+        database=database,
+        settings=RuntimeSettings(),
+        client=client,
+        dividend_scraper=scraper,
+    )
+
+    count = service.discover_universe(
+        selected_categories={'TWSE_STOCK'},
+        enrich_names=False,
+        rebuild=True,
+    )
+
+    assert count == 1
+    symbols_after = {item.symbol for item in database.list_instruments()}
+    assert '0050.TW' in symbols_after, '有持股對應的商品應該在 rebuild 後被保留'
+    assert '2330.TW' in symbols_after, '新清冊的商品應該被寫入'
+    assert '0056.TW' not in symbols_after, '沒有持股對應的舊商品應該被新清冊取代'
+
+
+def test_discover_universe_without_rebuild_upserts_incrementally(tmp_path):
+    database = Database(tmp_path / 'portfolio.db')
+    database.initialize()
+
+    existing_instrument = _instrument('0056.TW', '0056')
+    database.upsert_instruments([existing_instrument])
+
+    new_instrument = Instrument(symbol='2330.TW', stock_code='2330', name='台積電')
+    client = FakeYFinanceClient(discovered_instruments=[new_instrument])
+    scraper = FakeDividendScraper()
+    service = SyncService(
+        database=database,
+        settings=RuntimeSettings(),
+        client=client,
+        dividend_scraper=scraper,
+    )
+
+    count = service.discover_universe(
+        selected_categories={'TWSE_STOCK'},
+        enrich_names=False,
+        rebuild=False,
+    )
+
+    assert count == 1
+    symbols_after = {item.symbol for item in database.list_instruments()}
+    assert symbols_after == {'0056.TW', '2330.TW'}, '增量模式不應該清掉既有商品'
+
+
+def _quote(symbol='0050.TW', code='0050', close=160.0):
+    return MarketQuote(
+        symbol=symbol,
+        stock_code=code,
+        name='元大台灣50',
+        close=close,
+        previous_close=close - 2.0,
+        change=2.0,
+        change_percent=1.27,
+        volume=1000.0,
+        trade_date='2026-07-10',
+    )
+
+
+def test_sync_all_quotes_downloads_and_stores_quotes_for_full_universe(tmp_path):
+    database = Database(tmp_path / 'portfolio.db')
+    database.initialize()
+    database.upsert_instruments(
+        [_instrument('0050.TW', '0050'), _instrument('0056.TW', '0056')]
+    )
+
+    client = FakeYFinanceClient(quotes_result=([_quote('0050.TW', '0050')], []))
+    scraper = FakeDividendScraper()
+    service = SyncService(
+        database=database,
+        settings=RuntimeSettings(),
+        client=client,
+        dividend_scraper=scraper,
+    )
+
+    success, failed = service.sync_all_quotes()
+
+    assert (success, failed) == (1, 0)
+    assert len(client.download_quotes_calls[0]) == 2
+    assert database.get_quote_map()['0050.TW'].close == 160.0
+
+
+def test_sync_all_quotes_raises_when_universe_is_empty(tmp_path):
+    database = Database(tmp_path / 'portfolio.db')
+    database.initialize()
+    client = FakeYFinanceClient()
+    scraper = FakeDividendScraper()
+    service = SyncService(
+        database=database,
+        settings=RuntimeSettings(),
+        client=client,
+        dividend_scraper=scraper,
+    )
+
+    with pytest.raises(RuntimeError):
+        service.sync_all_quotes()
+
+
+def test_sync_holding_quotes_downloads_quotes_for_holdings_with_instruments(
+    tmp_path,
+):
+    client = FakeYFinanceClient(quotes_result=([_quote('0050.TW', '0050')], []))
+    scraper = FakeDividendScraper()
+    service = _build_service(tmp_path, client, scraper)
+
+    success, failed = service.sync_holding_quotes()
+
+    assert (success, failed) == (1, 0)
+    assert len(client.download_quotes_calls[0]) == 2
+
+
+def test_sync_holding_quotes_returns_zero_when_no_holding_has_instrument(tmp_path):
+    database = Database(tmp_path / 'portfolio.db')
+    database.initialize()
+    database.upsert_holding(_holding('0050.TW', '0050'))  # 沒有對應的 instrument
+    client = FakeYFinanceClient()
+    scraper = FakeDividendScraper()
+    service = SyncService(
+        database=database,
+        settings=RuntimeSettings(),
+        client=client,
+        dividend_scraper=scraper,
+    )
+
+    success, failed = service.sync_holding_quotes()
+
+    assert (success, failed) == (0, 0)
+    assert client.download_quotes_calls == []
